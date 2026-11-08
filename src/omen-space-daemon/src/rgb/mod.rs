@@ -323,6 +323,14 @@ struct LampArrayBackend {
     width_um: u32,
     height_um: u32,
     min_interval_us: u32,
+    /// Whether we already sent AutonomousMode=0. Re-sending the control
+    /// report before every frame resets the firmware's update pipeline; the
+    /// reference driver acquires once and streams frames without it.
+    acquired: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Keep the hidraw file open across frames. Opening it for every frame
+    /// added enough latency to push a 15-report frame past the firmware's
+    /// 33 ms update interval, which made the keyboard drop animation frames.
+    fd: std::sync::Arc<std::sync::Mutex<Option<std::fs::File>>>,
 }
 
 impl LampArrayBackend {
@@ -390,6 +398,21 @@ impl LampArrayBackend {
 
     fn open(&self) -> std::io::Result<std::fs::File> {
         std::fs::OpenOptions::new().read(true).write(true).open(&self.path)
+    }
+
+    /// Run a closure with the persistent hidraw file, opening it on first use.
+    fn with_file<T>(&self, f: impl FnOnce(&std::fs::File) -> T) -> Option<T> {
+        let mut guard = self.fd.lock().ok()?;
+        if guard.is_none() {
+            match self.open() {
+                Ok(file) => *guard = Some(file),
+                Err(e) => {
+                    warn!("LampArray {}: cannot open: {}", self.path, e);
+                    return None;
+                }
+            }
+        }
+        guard.as_ref().map(f)
     }
 
     /// Read the array's attributes and every lamp's geometry. Returns None if
@@ -470,6 +493,8 @@ impl LampArrayBackend {
             width_um,
             height_um,
             min_interval_us,
+            acquired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fd: std::sync::Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -480,9 +505,11 @@ impl LampArrayBackend {
 
     /// Give the array back to the firmware (AutonomousMode=1).
     fn release(&self) {
-        if let Ok(file) = self.open() {
-            let _ = Self::set_feature(&file, &[Self::R_CONTROL, 1]);
-        }
+        use std::sync::atomic::Ordering;
+        let _ = self.with_file(|file| {
+            let _ = Self::set_feature(file, &[Self::R_CONTROL, 1]);
+        });
+        self.acquired.store(false, Ordering::Relaxed);
     }
 
     fn range_report(start: u16, end: u16, color: (u8, u8, u8)) -> Vec<u8> {
@@ -556,25 +583,33 @@ impl LampArrayBackend {
     }
 
     fn set_frame(&self, colors: &[(u8, u8, u8)]) -> bool {
+        use std::sync::atomic::Ordering;
         let reports = self.frame_reports(colors);
         if reports.is_empty() {
             return false;
         }
-        let file = match self.open() {
-            Ok(f) => f,
-            Err(e) => {
-                warn!("LampArray {}: cannot open for writing: {}", self.path, e);
-                return false;
+        let result = self.with_file(|file| {
+            if !self.acquired.load(Ordering::Relaxed) {
+                self.acquire(file);
+                self.acquired.store(true, Ordering::Relaxed);
             }
-        };
-        self.acquire(&file);
-        for rep in &reports {
-            if let Err(e) = Self::set_feature(&file, rep) {
-                warn!("LampArray {}: report 0x{:02X} failed: {}", self.path, rep[0], e);
-                return false;
+            for rep in &reports {
+                if let Err(e) = Self::set_feature(file, rep) {
+                    warn!("LampArray {}: report 0x{:02X} failed: {}", self.path, rep[0], e);
+                    self.acquired.store(false, Ordering::Relaxed);
+                    return false;
+                }
+            }
+            true
+        });
+        if result != Some(true) {
+            // Drop a stale fd so the next frame re-opens the device after a
+            // re-enumeration (suspend/resume or a firmware reset).
+            if let Ok(mut guard) = self.fd.lock() {
+                *guard = None;
             }
         }
-        true
+        result.unwrap_or(false)
     }
 
     /// Map four logical zones onto the physical lamps by their real x position.
@@ -2097,6 +2132,8 @@ mod lamparray_tests {
             width_um: 342_000,
             height_um: 125_000,
             min_interval_us: 33_000,
+            acquired: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            fd: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
