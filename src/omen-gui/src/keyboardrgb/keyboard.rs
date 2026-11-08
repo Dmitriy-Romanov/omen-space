@@ -9,6 +9,24 @@ pub fn build_interactive_keyboard(
     per_key_colors: Rc<RefCell<Vec<String>>>,
     state_json_opt: &Option<serde_json::Value>
 ) -> (gtk::Box, Rc<dyn Fn(&str, f64)>, gtk::Box) {
+    // The daemon stores the last 104-key frame. Without this the canvas used
+    // its blue placeholder for every key it does not draw (indices 98..103),
+    // so "All + green" left those lamps blue on the hardware.
+    if let Some(state) = state_json_opt {
+        if let Some(arr) = state.get("per_key_colors").and_then(|v| v.as_array()) {
+            let mut pk = per_key_colors.borrow_mut();
+            for (i, v) in arr.iter().enumerate().take(pk.len()) {
+                if let Some(hex) = v.as_str() {
+                    pk[i] = if hex.starts_with('#') {
+                        hex.to_string()
+                    } else {
+                        format!("#{}", hex)
+                    };
+                }
+            }
+        }
+    }
+
     let kb_card = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
         .css_classes(["os-card"])
@@ -422,6 +440,15 @@ pub fn build_interactive_keyboard(
             let mut pk_mut = pk_c.borrow_mut();
             let mut zc_mut = zc_c.borrow_mut();
             let mut zones_changed = Vec::new();
+
+            // "All" must cover the whole 104-key frame, not only the keys the
+            // canvas happens to draw. Otherwise the six undrawn entries keep
+            // their placeholder colour and show up as blue keys on the board.
+            if mode == SelectionMode::All && detected_mode == KeyboardMode::PerKey {
+                for c in pk_mut.iter_mut() {
+                    *c = hex.clone();
+                }
+            }
             
             for n in &hit_names {
                 kc_mut.insert(n.clone(), hex.clone());
