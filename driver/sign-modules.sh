@@ -7,6 +7,7 @@
 # Then reboot, choose "Enroll MOK" in the blue MOK manager screen and enter the
 # password printed below (default: omen).
 set -euo pipefail
+trap 'echo "ERROR: signing failed at line $LINENO" >&2' ERR
 
 if [[ ${EUID} -ne 0 ]]; then
     echo "Run as root: sudo $0" >&2
@@ -17,13 +18,22 @@ MOK_DIR=${MOK_DIR:-/var/lib/omen-space/mok}
 KVER=$(uname -r)
 MOK_PASSWORD=${MOK_PASSWORD:-omen}
 
+echo "omen-space: signing hp-omen-extra for Secure Boot (kernel $KVER)"
+
 find_sign_file() {
-    find \
+    local dirs=()
+    for d in \
         "/usr/src/linux-headers-$KVER/scripts" \
         "/usr/src/kernels/$KVER/scripts" \
         "/lib/modules/$KVER/build/scripts" \
-        "/usr/lib/modules/$KVER/build/scripts" \
-        -name sign-file -type f 2>/dev/null | head -n 1
+        "/usr/lib/modules/$KVER/build/scripts"; do
+        [[ -d "$d" ]] && dirs+=("$d")
+    done
+    [[ ${#dirs[@]} -gt 0 ]] || return 0
+    # Some of the candidate directories do not exist on every distro; only
+    # pass the ones that do, and do not let find's SIGPIPE/exit status abort
+    # the whole script under `set -e -o pipefail`.
+    find "${dirs[@]}" -name sign-file -type f 2>/dev/null | head -n 1 || true
 }
 
 SIGN_FILE=$(find_sign_file)
