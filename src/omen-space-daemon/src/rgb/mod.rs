@@ -2151,6 +2151,24 @@ mod lamparray_tests {
 
 
 
+
+    #[test]
+    fn lamp_array_path_is_opt_in() {
+        let hp = HidPerKeyBackend {
+            hidraw_paths: vec!["/dev/null".to_string()],
+            device_pid: Some(0x0538),
+            lamparray: None,
+        };
+        assert!(!hp.is_lamparray());
+
+        let darfon = HidPerKeyBackend {
+            hidraw_paths: vec![],
+            device_pid: Some(0x54BF),
+            lamparray: Some(backend(vec![lamp(0, 0)])),
+        };
+        assert!(darfon.is_lamparray());
+    }
+
     #[test]
     fn per_key_frame_has_104_slots_and_is_a_valid_mode() {
         let cfg = RgbConfig::default();
