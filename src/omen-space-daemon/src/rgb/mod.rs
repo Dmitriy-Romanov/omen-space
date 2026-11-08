@@ -347,6 +347,28 @@ impl LampArrayBackend {
     const LAMPS_PER_MULTI: usize = 8;
     const FLAG_COMPLETE: u8 = 1;
 
+    /// GUI Per-Key canvas order -> HID keyboard usage (0 = no standard usage).
+    /// The canvas draws 98 keys; the 104-colour frame has six extra slots.
+    /// Lamps report these usages in InputBinding, so mapping by usage keeps
+    /// wide keys (Space, Shift, Enter) and the numpad in the right place.
+    const KEY_USAGES: [u8; 104] = [
+        // row 1: Esc F1-F12 Del Omen Calc Power
+        0x29, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x4C, 0x00, 0x00, 0x66,
+        // row 2
+        0x35, 0x1E, 0x1F, 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2D, 0x2E, 0x2A, 0x53, 0x54, 0x55, 0x56,
+        // row 3
+        0x2B, 0x14, 0x1A, 0x08, 0x15, 0x17, 0x1C, 0x18, 0x0C, 0x12, 0x13, 0x2F, 0x30, 0x31, 0x5F, 0x60, 0x61, 0x57,
+        // row 4
+        0x39, 0x04, 0x16, 0x07, 0x09, 0x0A, 0x0B, 0x0D, 0x0E, 0x0F, 0x33, 0x34, 0x28, 0x5C, 0x5D, 0x5E,
+        // row 5
+        0xE1, 0x1D, 0x1B, 0x06, 0x19, 0x05, 0x11, 0x10, 0x36, 0x37, 0x38, 0xE5, 0x52, 0x59, 0x5A, 0x5B, 0x58,
+        // row 6
+        0xE0, 0x00, 0xE3, 0xE2, 0x2C, 0xE6, 0x65, 0x50, 0x51, 0x4F, 0x62, 0x63,
+        // placeholders
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+
     /// HIDIOCSFEATURE/HIDIOCGFEATURE take the report length (including the
     /// report-id byte) in the ioctl number, so it has to be built at runtime:
     ///   _IOC(_IOC_READ|_IOC_WRITE, 'H', nr, size)
@@ -635,12 +657,65 @@ impl LampArrayBackend {
         if key_colors.len() == n {
             return key_colors.to_vec();
         }
+        if key_colors.len() == HidPerKeyBackend::TOTAL_KEY_COUNT {
+            return self.map_gui_frame(key_colors);
+        }
+        // Fallback for callers that pass a short zone list.
         (0..n)
             .map(|i| {
                 let k = (i * key_colors.len()) / n;
                 key_colors[k.min(key_colors.len() - 1)]
             })
             .collect()
+    }
+
+    /// Map the GUI's 104-key frame onto the physical lamps by HID InputBinding.
+    /// Wide keys share a usage (Space has five lamps, Shift three); lamps with no
+    /// standard usage (Fn/Omen/Calc and a few firmware-only keys) copy the colour
+    /// of the nearest mapped lamp instead of falling back to the GUI placeholder.
+    fn map_gui_frame(&self, key_colors: &[(u8, u8, u8)]) -> Vec<(u8, u8, u8)> {
+        let n = self.lamps.len();
+        let mut out = vec![(0u8, 0u8, 0u8); n];
+        let mut mapped = vec![false; n];
+
+        for (i, lamp) in self.lamps.iter().enumerate() {
+            if lamp.binding == 0 {
+                continue;
+            }
+            if let Some(idx) = Self::KEY_USAGES
+                .iter()
+                .position(|&usage| usage != 0 && usage == lamp.binding)
+            {
+                if let Some(color) = key_colors.get(idx) {
+                    out[i] = *color;
+                    mapped[i] = true;
+                }
+            }
+        }
+
+        for i in 0..n {
+            if mapped[i] {
+                continue;
+            }
+            let mut best: Option<usize> = None;
+            let mut best_d = u64::MAX;
+            for j in 0..n {
+                if !mapped[j] {
+                    continue;
+                }
+                let dx = self.lamps[i].x as i64 - self.lamps[j].x as i64;
+                let dy = self.lamps[i].y as i64 - self.lamps[j].y as i64;
+                let d = (dx * dx + dy * dy) as u64;
+                if d < best_d {
+                    best_d = d;
+                    best = Some(j);
+                }
+            }
+            out[i] = best
+                .map(|j| out[j])
+                .unwrap_or_else(|| key_colors.first().copied().unwrap_or((0, 0, 0)));
+        }
+        out
     }
 
     fn lamp_count(&self) -> usize {
@@ -2240,6 +2315,26 @@ mod lamparray_tests {
         assert_eq!(pid, Some(0x54BF));
         assert!(lamp.is_some(), "LampArray interface not found");
         assert!(!vendor.is_empty(), "MCU vendor interface not found");
+    }
+
+
+    #[test]
+    fn per_key_frames_map_by_hid_usage() {
+        let b = backend(vec![
+            LampInfo { id: 0, x: 0, y: 0, binding: 0x04 },      // A  -> GUI 54
+            LampInfo { id: 1, x: 10_000, y: 0, binding: 0x16 }, // S  -> GUI 55
+            LampInfo { id: 2, x: 20_000, y: 0, binding: 0x2C }, // Space -> GUI 90
+            LampInfo { id: 3, x: 1_000, y: 0, binding: 0 },     // unknown -> nearest A
+        ]);
+        let mut colors = vec![(0u8, 0u8, 0u8); 104];
+        colors[54] = (255, 0, 0);
+        colors[55] = (0, 255, 0);
+        colors[90] = (0, 0, 255);
+        let out = b.key_colors(&colors);
+        assert_eq!(out[0], (255, 0, 0));
+        assert_eq!(out[1], (0, 255, 0));
+        assert_eq!(out[2], (0, 0, 255));
+        assert_eq!(out[3], (255, 0, 0));
     }
 
     #[test]
