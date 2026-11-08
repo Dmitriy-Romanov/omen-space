@@ -165,6 +165,11 @@ pub fn build_interactive_keyboard(
     let aa_hook = apply_anim_rc.clone();
     let msl_c: Vec<String> = mode_str_list.iter().map(|s| s.to_string()).collect();
 
+    // Shared with the effect dropdown and the paint handlers: any explicit
+    // app choice takes lighting back from the firmware, so the "Hardware / Fn
+    // effects" switch must visibly turn itself off.
+    let hw_switch_shared: Rc<RefCell<Option<gtk::Switch>>> = Rc::new(RefCell::new(None));
+
     let effect_model = gtk::StringList::new(&effect_labels);
     let effects_dropdown = gtk::DropDown::builder()
         .model(&effect_model)
@@ -180,6 +185,7 @@ pub fn build_interactive_keyboard(
     let msl_local = msl_c.clone();
     let aa_local = aa_hook.clone();
     let speed_ref = speed_rc.clone();
+    let hw_sw_mode = hw_switch_shared.clone();
     effects_dropdown.connect_selected_notify(move |dd| {
         let i = dd.selected() as usize;
         if i < msl_local.len() {
@@ -198,6 +204,12 @@ pub fn build_interactive_keyboard(
             if let Some(anim_func) = &*aa_local.borrow() {
                 let anim_m = if m.starts_with("wave_") { "wave" } else { m.as_str() };
                 anim_func(anim_m, speed);
+            }
+            // The daemon clears hw_effects on SetMode; reflect that here.
+            if let Some(sw) = hw_sw_mode.borrow().as_ref() {
+                if sw.is_active() {
+                    sw.set_active(false);
+                }
             }
         }
     });
@@ -777,6 +789,7 @@ pub fn build_interactive_keyboard(
         let hw_switch = gtk::Switch::builder().valign(gtk::Align::Center).active(hw_on.get()).build();
         hw_switch.set_tooltip_text(Some("Let the keyboard firmware own the lighting: Fn+1/Fn+2 hardware effects work again. App colours and software effects are disabled while this is on; rainbow, cycle, breathing, starlight and raindrop run on the keyboard MCU, other modes leave the firmware's current effect in place. The brightness slider does not apply in this mode."));
         hw_box.append(&hw_switch);
+        *hw_switch_shared.borrow_mut() = Some(hw_switch.clone());
         let hw_on_c = hw_on.clone();
         let bright_c = bright_scale.clone();
         let anim_state_hw = anim_state.clone();

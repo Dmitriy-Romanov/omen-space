@@ -1716,6 +1716,8 @@ impl RgbService {
         {
             let mut g = self.inner.lock().await;
             g.config.mode = "static".to_string();
+            // Any explicit app colour takes lighting back from the firmware.
+            g.config.hw_effects = false;
             g.config.power = true;
             if g.config.colors.len() < 17 {
                 g.config.colors.resize(17, "FF0000".to_string());
@@ -1741,6 +1743,9 @@ impl RgbService {
             let mut g = self.inner.lock().await;
             g.config.mode = mode_str;
             g.config.speed = (speed_val as u32).clamp(1, 100);
+            // Selecting an app effect takes lighting back from the firmware.
+            // The hardware/Fn switch can hand it back explicitly.
+            g.config.hw_effects = false;
             g.config.power = true;
             g.config.save();
         }
@@ -1939,6 +1944,8 @@ impl RgbService {
         if g.hid_per_key.is_lamparray() {
             g.config.mode = "per_key_custom".to_string();
         }
+        // Painting a per-key frame takes lighting back from the firmware.
+        g.config.hw_effects = false;
         g.config.power = true;
         g.config.save();
 
