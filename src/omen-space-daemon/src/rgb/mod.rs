@@ -271,10 +271,7 @@ impl RgbHardware {
 
     fn has_lightbar(&self) -> bool {
         if let Some(ref base) = self.driver_path {
-            if Path::new(&format!("{}/lightbar", base)).exists()
-                || Path::new(&format!("{}/all_zones", base)).exists()
-                || Path::new(&format!("{}/zones", base)).exists()
-            {
+            if Path::new(&format!("{}/lightbar", base)).exists() {
                 return true;
             }
         }
@@ -1350,7 +1347,12 @@ impl RgbService {
                 // repaint the current frame from the host.
                 let activity =
                     crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
-                let wake = g.config.power && activity != last_key_activity;
+                // Only the HID LampArray stops waking on its own while the
+                // host holds it. Other keyboards keep their firmware wake
+                // behaviour and must not be repainted on every keypress.
+                let wake = g.config.power
+                    && g.hid_per_key.is_lamparray()
+                    && activity != last_key_activity;
                 last_key_activity = activity;
                 drop(g);
                 if wake {
@@ -1590,7 +1592,7 @@ impl RgbService {
                     scale_hex_color(&raw, scaler)
                 }).collect()
             };
-            if g.hid_per_key.is_lamparray() {
+            if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
                 // The WMI zones are the light bar on this board; the keyboard
                 // is a separate HID LampArray.
                 g.hw.write_lightbar_zones(&lb_colors);
@@ -1605,7 +1607,7 @@ impl RgbService {
         // On a per-key OMEN MAX the WMI zone attributes belong to the light
         // bar, not to the keyboard. Writing the keyboard zone colours below
         // would overwrite the bar we just painted, so stop here.
-        if g.hid_per_key.is_lamparray() {
+        if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
             let level = if g.hw.is_new_driver {
                 if g.config.lightbar_power { g.config.lightbar_brightness } else { 0 }
             } else if g.config.lightbar_power && g.config.lightbar_brightness > 0 {
@@ -1884,7 +1886,12 @@ impl RgbService {
             .iter()
             .map(|c| c.trim_start_matches('#').to_uppercase())
             .collect();
-        g.config.mode = "per_key_custom".to_string();
+        // Only the LampArray path needs the mode switch to restore its frame
+        // after a restart. Keep the previous behaviour for HP 0x03F0
+        // per-key keyboards, whose EnterEffect/Commit path still works.
+        if g.hid_per_key.is_lamparray() {
+            g.config.mode = "per_key_custom".to_string();
+        }
         g.config.power = true;
         g.config.save();
 
