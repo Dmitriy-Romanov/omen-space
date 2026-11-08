@@ -1290,6 +1290,8 @@ impl RgbService {
 
     async fn software_animation_loop(inner: Arc<Mutex<RgbInner>>) {
         let mut last_per_key_colors: Vec<String> = Vec::new();
+        let mut last_key_activity =
+            crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
         loop {
             let mut g = inner.lock().await;
             let has_per_key = g.hid_per_key.is_available();
@@ -1305,8 +1307,19 @@ impl RgbService {
                 continue;
             }
             if !g.config.power || g.config.mode == "static" || g.config.mode == "per_key_custom" { 
+                // The keyboard firmware turns its own backlight off after the
+                // BIOS idle timeout. While we hold the LampArray it does not
+                // wake on a keypress, so the first key after idle has to
+                // repaint the current frame from the host.
+                let activity =
+                    crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
+                let wake = g.config.power && activity != last_key_activity;
+                last_key_activity = activity;
                 drop(g);
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                if wake {
+                    Self::apply_state(inner.clone()).await;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                 continue; 
             }
 
