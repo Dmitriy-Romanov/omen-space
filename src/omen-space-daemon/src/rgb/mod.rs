@@ -1405,6 +1405,9 @@ impl RgbService {
             let mode = g.config.mode.clone();
 
             // Hardware effects (#322): let the keyboard MCU animate by itself.
+            // If the selected mode has no MCU equivalent, leave the array with
+            // the firmware rather than streaming frames: that is what makes
+            // Fn+1/Fn+2 hardware effects work again.
             if has_per_key && g.config.hw_effects {
                 if let Some(rec) = g.hid_per_key.mcu_effect_for(&mode, speed, &direction, &colors) {
                     let sig = rec.to_vec();
@@ -1413,11 +1416,14 @@ impl RgbService {
                             g.mcu_sig = Some(sig);
                         }
                     }
-                    last_per_key_colors.clear();
-                    drop(g);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                    continue;
+                } else {
+                    g.hid_per_key.release_lamparray();
+                    g.mcu_sig = None;
                 }
+                last_per_key_colors.clear();
+                drop(g);
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                continue;
             }
             g.mcu_sig = None;
 
@@ -1560,7 +1566,13 @@ impl RgbService {
         // Runs regardless of whether the sysfs driver is present, since HID and
         // sysfs are independent hardware paths (USB vendor vs. kernel LED class).
         if g.hid_per_key.is_available() {
-            if !power || brightness == 0 {
+            if g.config.hw_effects && g.hid_per_key.is_lamparray() {
+                // "Hardware effects" means the keyboard firmware owns the
+                // lighting. Release the LampArray so the MCU's own effect keys
+                // (Fn+1/Fn+2) work again; the effect loop sends an MCU effect
+                // when the selected mode has one.
+                g.hid_per_key.release_lamparray();
+            } else if !power || brightness == 0 {
                 g.hid_per_key.send_enter_per_key_mode(0);
                 g.hid_per_key.set_zone_colors(&vec!["000000".to_string(); 8]);
             } else {
