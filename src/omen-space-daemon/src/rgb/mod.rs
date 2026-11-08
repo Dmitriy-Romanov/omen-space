@@ -235,9 +235,46 @@ impl RgbHardware {
         }
     }
 
+    /// On per-key OMEN MAX boards the WMI "zones" are the 4-segment light
+    /// bar, while the keyboard is a separate HID LampArray. On 8D88 the
+    /// driver's `lightbar` attribute neither reflects nor drives the panel
+    /// (its GET returns black), but `all_zones` uses the same WMI colour
+    /// query as the reference driver and works.
+    fn write_lightbar_zones(&self, colors: &[String]) {
+        let Some(ref base) = self.driver_path else { return; };
+        let format_color = |c: &String| {
+            if c.eq_ignore_ascii_case("FFFFFF") {
+                "FFFFFE".to_string()
+            } else {
+                c.clone()
+            }
+        };
+        let payload = colors.iter().take(4).map(format_color).collect::<Vec<_>>().join(" ");
+        for name in ["all_zones", "zones"] {
+            let p = format!("{}/{}", base, name);
+            if Path::new(&p).exists() {
+                let _ = std::fs::write(&p, &payload);
+                return;
+            }
+        }
+        // The new driver names the attributes zone00..; the legacy one zone0..
+        for (i, c) in colors.iter().take(4).enumerate() {
+            for name in [format!("zone{:02}", i), format!("zone{}", i)] {
+                let p = format!("{}/{}", base, name);
+                if Path::new(&p).exists() {
+                    let _ = std::fs::write(&p, c);
+                    break;
+                }
+            }
+        }
+    }
+
     fn has_lightbar(&self) -> bool {
         if let Some(ref base) = self.driver_path {
-            if Path::new(&format!("{}/lightbar", base)).exists() {
+            if Path::new(&format!("{}/lightbar", base)).exists()
+                || Path::new(&format!("{}/all_zones", base)).exists()
+                || Path::new(&format!("{}/zones", base)).exists()
+            {
                 return true;
             }
         }
@@ -1553,11 +1590,32 @@ impl RgbService {
                     scale_hex_color(&raw, scaler)
                 }).collect()
             };
-            g.hw.write_lightbar(&lb_colors);
+            if g.hid_per_key.is_lamparray() {
+                // The WMI zones are the light bar on this board; the keyboard
+                // is a separate HID LampArray.
+                g.hw.write_lightbar_zones(&lb_colors);
+            } else {
+                g.hw.write_lightbar(&lb_colors);
+            }
         }
 
         // ── Standard sysfs driver ───────────────────────────────────────────────
         if !g.hw.available { return; }
+
+        // On a per-key OMEN MAX the WMI zone attributes belong to the light
+        // bar, not to the keyboard. Writing the keyboard zone colours below
+        // would overwrite the bar we just painted, so stop here.
+        if g.hid_per_key.is_lamparray() {
+            let level = if g.hw.is_new_driver {
+                if g.config.lightbar_power { g.config.lightbar_brightness } else { 0 }
+            } else if g.config.lightbar_power && g.config.lightbar_brightness > 0 {
+                1
+            } else {
+                0
+            };
+            g.hw.write_brightness(level);
+            return;
+        }
 
         if !power || brightness == 0 {
             g.hw.write_brightness(0);
