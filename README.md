@@ -1,3 +1,8 @@
+> **8D88 fork.** This branch is an opt-in build for the HP OMEN MAX 16-ak0xxx
+> (board 8D88, keyboard 0d62:54bf). It is based on upstream v2.2.1 / 6a5adae.
+> Other boards are not tested here. See [FORK-8D88.md](FORK-8D88.md) for scope,
+> install and known limitations.
+
 <div align="center">
   <img src="images/omenspace.png" alt="OMEN Space Logo" width="110" />
 
