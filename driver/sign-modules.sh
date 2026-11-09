@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Sign the DKMS hp-omen-extra module with the omen-space MOK and register that
-# MOK. Required for the 4-zone light bar on systems with Secure Boot enabled:
-# the kernel rejects the DKMS module when its signing key is not enrolled.
+# Sign the DKMS hp-omen-extra and hp-wmi modules with the omen-space MOK and
+# register that MOK. Required with Secure Boot: the kernel rejects DKMS modules
+# whose signing key is not enrolled. hp-omen-extra is the light bar/RGB driver;
+# hp-wmi provides fan control (pwm1_enable / fan*_target) and thermal sysfs.
 #
 # Usage: sudo ./driver/sign-modules.sh
 # Then reboot, choose "Enroll MOK" in the blue MOK manager screen and enter the
@@ -18,7 +19,7 @@ MOK_DIR=${MOK_DIR:-/var/lib/omen-space/mok}
 KVER=$(uname -r)
 MOK_PASSWORD=${MOK_PASSWORD:-omen}
 
-echo "omen-space: signing hp-omen-extra for Secure Boot (kernel $KVER)"
+echo "omen-space: signing hp-omen-extra + hp-wmi for Secure Boot (kernel $KVER)"
 
 find_sign_file() {
     local dirs=()
@@ -99,14 +100,28 @@ if [[ -z "$MOD_PATH" ]]; then
     exit 1
 fi
 sign_module "$MOD_PATH"
+
+# Fan control/thermal sysfs lives in hp-wmi. It is a separate DKMS module and
+# may have been signed by an unenrolled DKMS key, which leaves the app without
+# pwm1_enable/fan*_target and breaks Max/EC/manual modes.
+HPWMI_PATH=$(modinfo -n hp-wmi 2>/dev/null || true)
+if [[ -n "$HPWMI_PATH" ]]; then
+    sign_module "$HPWMI_PATH"
+else
+    echo "[i] hp-wmi is not a loadable module (built-in or not installed); skipping"
+fi
 depmod -a "$KVER"
 
-# The light bar driver is independent of the custom hp-wmi; load it on boot.
-echo "hp_omen_extra" > /etc/modules-load.d/omen-space-lightbar.conf
+# hp-wmi provides fan control/thermal sysfs; hp-omen-extra provides RGB/lightbar.
+# Both are separate DKMS modules and must survive a reboot.
+printf '%s\n' hp_wmi hp_omen_extra > /etc/modules-load.d/omen-space.conf
 
 echo
-echo "Signed module: $MOD_PATH"
-echo "Signer: $(modinfo -F signer hp-omen-extra 2>/dev/null || true)"
+echo "Signed modules:"
+echo "  hp-omen-extra: $MOD_PATH ($(modinfo -F signer hp-omen-extra 2>/dev/null || true))"
+if [[ -n "$HPWMI_PATH" ]]; then
+    echo "  hp-wmi:        $HPWMI_PATH ($(modinfo -F signer hp-wmi 2>/dev/null || true))"
+fi
 echo
 
 if mokutil --test-key "$MOK_DIR/MOK.der" 2>/dev/null | grep -qi "not enrolled"; then
@@ -119,11 +134,17 @@ if mokutil --test-key "$MOK_DIR/MOK.der" 2>/dev/null | grep -qi "not enrolled"; 
     echo "  4. Password: $MOK_PASSWORD"
     echo "  5. Reboot"
 else
-    echo "MOK is already enrolled; loading hp_omen_extra now."
+    echo "MOK is already enrolled; loading hp-wmi and hp_omen_extra now."
+    modprobe hp_wmi || true
     modprobe hp_omen_extra || true
+    if [[ -d /sys/devices/platform/hp-wmi ]]; then
+        echo "[ok] Fan/thermal driver is loaded: /sys/devices/platform/hp-wmi"
+    else
+        echo "WARNING: hp-wmi did not create /sys/devices/platform/hp-wmi; check dmesg."
+    fi
     if [[ -d /sys/devices/platform/hp-omen-extra ]]; then
         echo "[ok] Light bar driver is loaded: /sys/devices/platform/hp-omen-extra"
     else
-        echo "WARNING: module did not create /sys/devices/platform/hp-omen-extra; check dmesg."
+        echo "WARNING: hp-omen-extra did not create /sys/devices/platform/hp-omen-extra; check dmesg."
     fi
 fi
