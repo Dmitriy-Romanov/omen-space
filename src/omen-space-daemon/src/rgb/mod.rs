@@ -1410,6 +1410,10 @@ struct RgbInner {
     calibrating: bool,
     calibration_until: Option<std::time::Instant>,
     lightbar_step: f64,
+    /// Last WMI on/off level written to the bar. Avoids re-writing it on every
+    /// keypress (the idle-wake repaint calls apply_state), which made an
+    /// effect blink while typing.
+    last_lightbar_level: i32,
 }
 
 #[derive(Clone)]
@@ -1440,6 +1444,7 @@ impl RgbService {
         let inner = Arc::new(Mutex::new(RgbInner {
             hw, hid_per_key, config, per_key_map, color_cache: HashMap::new(), anim_step: 0.0, mcu_sig: None, wizard, evdev_monitor, desktop_rgb,
             calibrating: false, calibration_until: None, lightbar_step: 0.0,
+            last_lightbar_level: -1,
         }));
 
         let svc = Self { inner: inner.clone() };
@@ -1905,21 +1910,30 @@ impl RgbService {
 
         // ── Lightbar ────────────────────────────────────────────────────────────
         if g.hw.available {
-            let lb_colors: Vec<String> = if !g.config.lightbar_power || g.config.lightbar_brightness == 0 {
-                vec!["000000".to_string(); 4]
-            } else {
-                let scaler = (g.config.lightbar_brightness as f64 / 100.0).clamp(0.0, 1.0);
-                (0..4).map(|i| {
-                    let raw = g.config.lightbar_colors.get(i).cloned().unwrap_or_else(|| "000000".to_string());
-                    scale_hex_color(&raw, scaler)
-                }).collect()
-            };
-            if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
-                // The WMI zones are the light bar on this board; the keyboard
-                // is a separate HID LampArray.
-                g.hw.write_lightbar_zones(&lb_colors);
-            } else {
-                g.hw.write_lightbar(&lb_colors);
+            // When a non-static effect is running, the lightbar animation loop
+            // owns the bar. Writing the static colours here on every keypress
+            // (the idle-wake repaint calls apply_state) made the panel blink
+            // while typing.
+            let effect_active = g.config.lightbar_mode != "static"
+                && g.config.lightbar_power
+                && g.config.lightbar_brightness > 0;
+            if !effect_active {
+                let lb_colors: Vec<String> = if !g.config.lightbar_power || g.config.lightbar_brightness == 0 {
+                    vec!["000000".to_string(); 4]
+                } else {
+                    let scaler = (g.config.lightbar_brightness as f64 / 100.0).clamp(0.0, 1.0);
+                    (0..4).map(|i| {
+                        let raw = g.config.lightbar_colors.get(i).cloned().unwrap_or_else(|| "000000".to_string());
+                        scale_hex_color(&raw, scaler)
+                    }).collect()
+                };
+                if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
+                    // The WMI zones are the light bar on this board; the keyboard
+                    // is a separate HID LampArray.
+                    g.hw.write_lightbar_zones(&lb_colors);
+                } else {
+                    g.hw.write_lightbar(&lb_colors);
+                }
             }
         }
 
@@ -1931,13 +1945,16 @@ impl RgbService {
         // would overwrite the bar we just painted, so stop here.
         if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
             let level = if g.hw.is_new_driver {
-                if g.config.lightbar_power { g.config.lightbar_brightness } else { 0 }
+                if g.config.lightbar_power { g.config.lightbar_brightness as i32 } else { 0 }
             } else if g.config.lightbar_power && g.config.lightbar_brightness > 0 {
                 1
             } else {
                 0
             };
-            g.hw.write_brightness(level);
+            if g.last_lightbar_level != level {
+                g.hw.write_brightness(level as u32);
+                g.last_lightbar_level = level;
+            }
             return;
         }
 
