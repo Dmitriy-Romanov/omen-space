@@ -1015,6 +1015,20 @@ impl FanService {
     ///   ec   → platform_profile=balanced, pwm1_enable=2 (BIOS hardware control)
     ///   auto/custom/performance → pwm1_enable=1 (manual), duty set by monitor loop or manual target
     ///   max  → platform_profile=performance, pwm1_enable=0 (full speed)
+    /// Leave the driver's max-boost state before switching to BIOS/manual.
+    /// Writing pwm1_enable=2 (or 1) directly from 0 can leave the max flag set on
+    /// hp-wmi, so the fans stay at full speed even though the sysfs value looks
+    /// correct. A short manual duty write clears it.
+    async fn leave_max_boost(hwmon: &std::path::Path) {
+        if sysfs_read(hwmon.join("pwm1_enable"), 0).await == 0 {
+            let _ = sysfs_write(hwmon.join("pwm1_enable"), "1").await;
+            if sysfs_exists(hwmon.join("pwm1")).await {
+                let _ = sysfs_write(hwmon.join("pwm1"), "100").await;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    }
+
     async fn set_mode_internal(state: &mut FanState, mode: &str) -> bool {
         // Determine pwm1_enable value (OmenCore mapping)
         let pwm_enable_val = match mode {
@@ -1064,14 +1078,11 @@ impl FanService {
                     // Fall back to hardware EC mode (pwm1_enable=2) instead of failing.
                     ok = sysfs_write(hwmon.join("pwm1_enable"), "2").await;
                 } else {
-                    let current = sysfs_read(hwmon.join("pwm1_enable"), 2).await;
-                    if current == 0 {
-                        let _ = sysfs_write(hwmon.join("pwm1_enable"), "2").await;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
-                    }
+                    Self::leave_max_boost(hwmon).await;
                     ok = sysfs_write(hwmon.join("pwm1_enable"), "1").await;
                 }
             } else if pwm_enable_val == 2 {
+                Self::leave_max_boost(hwmon).await;
                 ok = sysfs_write(hwmon.join("pwm1_enable"), "2").await;
             }
             if ok {
