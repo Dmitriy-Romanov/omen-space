@@ -897,8 +897,50 @@ impl HidPerKeyBackend {
         }
     }
 
+    /// Write a vendor/MCU report. The reference implementation writes a
+    /// leading 0x00 report id before the 64-byte frame (65 bytes total).
+    /// Older code here wrote only 64 bytes; try the reference form first and
+    /// fall back to the old one if the device rejects it.
+    fn write_vendor_frame(&self, frame: &[u8]) -> bool {
+        use std::io::Write;
+        for path in &self.hidraw_paths {
+            let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) else {
+                continue;
+            };
+            let mut buf = Vec::with_capacity(frame.len() + 1);
+            buf.push(0x00);
+            buf.extend_from_slice(frame);
+            if file.write_all(&buf).is_ok() {
+                return true;
+            }
+            drop(file);
+            let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) else {
+                continue;
+            };
+            if file.write_all(frame).is_ok() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// MCU "lighting on" (the same frame OMEN Gaming Hub sends before effects).
+    /// The keyboard's own idle timeout can leave the backlight off even while
+    /// the host paints frames; re-sending this should wake the MCU lighting.
+    fn send_lighting_on(&self) -> bool {
+        if self.device_pid != Some(0x54BF) {
+            return false;
+        }
+        let mut on = [0u8; 64];
+        on[0] = 0x09;
+        on[2] = 1;
+        on[4] = 0x01;
+        self.write_vendor_frame(&on)
+    }
+
     /// Write colours in physical lamp order (the order reported by GetLampMap).
     fn set_lamp_colors(&self, colors: &[(u8, u8, u8)]) -> bool {
+        let _ = self.send_lighting_on();
         match self.lamparray {
             Some(ref la) => la.set_frame(colors),
             None => false,

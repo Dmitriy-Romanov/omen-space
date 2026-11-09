@@ -107,17 +107,29 @@ def flush_events(fd):
             return
 
 
-def wait_key(fd, timeout):
-    """Return (code, name) of the next key press, or None on timeout."""
+def wait_key(fd, timeout, refresh=None, refresh_s=2.0):
+    """Return the next key press, or None on timeout.
+
+    refresh() is called periodically while waiting. The keyboard firmware turns
+    its backlight off after the BIOS idle timeout even while a host frame is
+    shown; re-sending the calibration frame keeps the lamp visible.
+    """
     deadline = time.monotonic() + timeout
     buf = b""
     while True:
         left = deadline - time.monotonic()
         if left <= 0:
             return None
-        r, _, _ = select.select([fd], [], [], left)
+        wait = left if not refresh or refresh_s <= 0 else min(left, refresh_s)
+        r, _, _ = select.select([fd], [], [], wait)
         if not r:
-            return None
+            if refresh:
+                try:
+                    refresh()
+                    print(".", end="", flush=True)
+                except Exception as e:
+                    print("\n  refresh failed: %s" % e, file=sys.stderr)
+            continue
         try:
             data = os.read(fd, 24 * 64)
         except BlockingIOError:
@@ -185,6 +197,9 @@ def main():
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--refresh", type=float, default=2.0,
+                    help="re-send the lamp frame every N seconds (0 = off)")
+
     ap.add_argument("--out", default="/home/dima/omen-space-rgb-notes/lamp-calibration.json")
     ap.add_argument("--resume", action="store_true")
     args = ap.parse_args()
@@ -238,7 +253,8 @@ def main():
         old_attrs = None
 
     print("Starting lamp calibration: %d..%d of %d" % (start, end - 1, count))
-    print("Press the key that lights up. No key for %.0fs = skip. Ctrl+C = stop." % args.timeout)
+    print("For each lamp: press SHIFT to wake the keyboard (ignored), then press the lit key.")
+    print("No key for %.0fs = skip. Ctrl+C = stop." % args.timeout)
     dbus("StartLampCalibration")
     time.sleep(1.0)
     flush_events(fd)
@@ -249,20 +265,54 @@ def main():
             colors = ["000000"] * count
             colors[index] = "FFFFFF"
             set_lamp_colors(colors)
-            print("Lamp %d/%d  index=%d id=%d binding=0x%02X  x=%dmm y=%dmm  -> press key"
+            print("Lamp %d/%d  index=%d id=%d binding=0x%02X  x=%dmm y=%dmm"
                   % (index + 1, count, index, lamp["id"], lamp["binding"],
                      lamp["x"] // 1000, lamp["y"] // 1000))
+            print("  press SHIFT to wake (ignored), then the lit key")
             sys.stdout.flush()
             flush_events(fd)
-            code = wait_key(fd, args.timeout)
-            if code is None:
+
+            # Phase 1: wait for Shift. This wakes the keyboard and is never
+            # recorded. Any other key is ignored with a hint.
+            woke = False
+            deadline = time.monotonic() + args.timeout
+            while time.monotonic() < deadline:
+                code = wait_key(
+                    fd, max(0.1, deadline - time.monotonic()),
+                    refresh=lambda: set_lamp_colors(colors),
+                    refresh_s=args.refresh,
+                )
+                if code is None:
+                    break
+                if code in (42, 54):  # KEY_LEFTSHIFT / KEY_RIGHTSHIFT
+                    woke = True
+                    break
+                print("  waiting for SHIFT (got %s); press SHIFT to wake" % read_name(code))
+                set_lamp_colors(colors)
+                flush_events(fd)
+            if not woke:
                 rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
                        "binding": lamp["binding"], "skipped": True}
-                print("  skipped (timeout)")
+                print("  skipped (timeout waiting for SHIFT)")
             else:
-                rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
-                       "binding": lamp["binding"], "keycode": code, "key_name": read_name(code)}
-                print("  recorded %s (code %d)" % (rec["key_name"], code))
+                # The keyboard is awake now; re-send the frame so the lamp is
+                # definitely visible, then wait for the actual key.
+                set_lamp_colors(colors)
+                time.sleep(0.2)
+                flush_events(fd)
+                code = wait_key(
+                    fd, args.timeout,
+                    refresh=lambda: set_lamp_colors(colors),
+                    refresh_s=args.refresh,
+                )
+                if code is None:
+                    rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
+                           "binding": lamp["binding"], "skipped": True}
+                    print("  skipped (timeout waiting for the lit key)")
+                else:
+                    rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
+                           "binding": lamp["binding"], "keycode": code, "key_name": read_name(code)}
+                    print("  recorded %s (code %d)" % (rec["key_name"], code))
             data["records"] = [r for r in data["records"] if r["index"] != index] + [rec]
             save_json(args.out, data)
     except KeyboardInterrupt:
