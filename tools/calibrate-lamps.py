@@ -253,7 +253,7 @@ def main():
         old_attrs = None
 
     print("Starting lamp calibration: %d..%d of %d" % (start, end - 1, count))
-    print("For each lamp: press SHIFT first (wakes the keyboard, ignored); the lamp lights, then press it.")
+    print("For each lamp: press the lit key twice in a row. Shift is ignored; the first press may wake the keyboard.")
     print("No key for %.0fs = skip. Ctrl+C = stop." % args.timeout)
     dbus("StartLampCalibration")
     time.sleep(1.0)
@@ -267,51 +267,41 @@ def main():
             print("Lamp %d/%d  index=%d id=%d binding=0x%02X  x=%dmm y=%dmm"
                   % (index + 1, count, index, lamp["id"], lamp["binding"],
                      lamp["x"] // 1000, lamp["y"] // 1000))
-            print("  press SHIFT to wake the keyboard (ignored); the lamp lights after SHIFT")
+            allow_shift = lamp["binding"] in (0xE1, 0xE5)
+            print("  press the lit key TWICE in a row (SHIFT is ignored%s)"
+                  % ("" if not allow_shift else "; Shift allowed for this lamp"))
             sys.stdout.flush()
+            set_lamp_colors(colors)
             flush_events(fd)
 
-            # Phase 1: wait for Shift BEFORE lighting the lamp. The lamp is
-            # therefore only visible once the keyboard is awake, so the user
-            # cannot mistake the wake press for the answer.
-            woke = False
+            # The first non-Shift press may be the wake-up, the second the
+            # answer. Two identical presses in a row confirm the key.
+            rec = None
+            last = None
             deadline = time.monotonic() + args.timeout
             while time.monotonic() < deadline:
                 code = wait_key(
                     fd, max(0.1, deadline - time.monotonic()),
-                    refresh=None,
-                    refresh_s=0,
-                )
-                if code is None:
-                    break
-                if code in (42, 54):  # KEY_LEFTSHIFT / KEY_RIGHTSHIFT
-                    woke = True
-                    break
-                print("  press SHIFT first (got %s)" % read_name(code))
-                flush_events(fd)
-            if not woke:
-                rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
-                       "binding": lamp["binding"], "skipped": True}
-                print("  skipped (timeout waiting for SHIFT)")
-            else:
-                # Keyboard is awake; now light the lamp and ask for its key.
-                set_lamp_colors(colors)
-                time.sleep(0.2)
-                flush_events(fd)
-                print("  now press the lit key")
-                code = wait_key(
-                    fd, args.timeout,
                     refresh=lambda: set_lamp_colors(colors),
                     refresh_s=args.refresh,
                 )
                 if code is None:
                     rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
                            "binding": lamp["binding"], "skipped": True}
-                    print("  skipped (timeout waiting for the lit key)")
-                else:
+                    print("  skipped (timeout)")
+                    break
+                if code in (42, 54) and not allow_shift:  # KEY_LEFTSHIFT / KEY_RIGHTSHIFT
+                    print("  SHIFT ignored; press the lit key twice")
+                    last = None
+                    continue
+                if code == last:
                     rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
                            "binding": lamp["binding"], "keycode": code, "key_name": read_name(code)}
                     print("  recorded %s (code %d)" % (rec["key_name"], code))
+                    break
+                last = code
+                deadline = time.monotonic() + args.timeout
+                print("  got %s; press the same key again to confirm" % read_name(code))
             data["records"] = [r for r in data["records"] if r["index"] != index] + [rec]
             save_json(args.out, data)
     except KeyboardInterrupt:
