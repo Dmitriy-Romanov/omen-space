@@ -253,7 +253,7 @@ def main():
         old_attrs = None
 
     print("Starting lamp calibration: %d..%d of %d" % (start, end - 1, count))
-    print("For each lamp: press SHIFT to wake the keyboard (ignored), then press the lit key.")
+    print("For each lamp: press SHIFT first (wakes the keyboard, ignored); the lamp lights, then press it.")
     print("No key for %.0fs = skip. Ctrl+C = stop." % args.timeout)
     dbus("StartLampCalibration")
     time.sleep(1.0)
@@ -264,42 +264,41 @@ def main():
             lamp = lamps[index]
             colors = ["000000"] * count
             colors[index] = "FFFFFF"
-            set_lamp_colors(colors)
             print("Lamp %d/%d  index=%d id=%d binding=0x%02X  x=%dmm y=%dmm"
                   % (index + 1, count, index, lamp["id"], lamp["binding"],
                      lamp["x"] // 1000, lamp["y"] // 1000))
-            print("  press SHIFT to wake (ignored), then the lit key")
+            print("  press SHIFT to wake the keyboard (ignored); the lamp lights after SHIFT")
             sys.stdout.flush()
             flush_events(fd)
 
-            # Phase 1: wait for Shift. This wakes the keyboard and is never
-            # recorded. Any other key is ignored with a hint.
+            # Phase 1: wait for Shift BEFORE lighting the lamp. The lamp is
+            # therefore only visible once the keyboard is awake, so the user
+            # cannot mistake the wake press for the answer.
             woke = False
             deadline = time.monotonic() + args.timeout
             while time.monotonic() < deadline:
                 code = wait_key(
                     fd, max(0.1, deadline - time.monotonic()),
-                    refresh=lambda: set_lamp_colors(colors),
-                    refresh_s=args.refresh,
+                    refresh=None,
+                    refresh_s=0,
                 )
                 if code is None:
                     break
                 if code in (42, 54):  # KEY_LEFTSHIFT / KEY_RIGHTSHIFT
                     woke = True
                     break
-                print("  waiting for SHIFT (got %s); press SHIFT to wake" % read_name(code))
-                set_lamp_colors(colors)
+                print("  press SHIFT first (got %s)" % read_name(code))
                 flush_events(fd)
             if not woke:
                 rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
                        "binding": lamp["binding"], "skipped": True}
                 print("  skipped (timeout waiting for SHIFT)")
             else:
-                # The keyboard is awake now; re-send the frame so the lamp is
-                # definitely visible, then wait for the actual key.
+                # Keyboard is awake; now light the lamp and ask for its key.
                 set_lamp_colors(colors)
                 time.sleep(0.2)
                 flush_events(fd)
+                print("  now press the lit key")
                 code = wait_key(
                     fd, args.timeout,
                     refresh=lambda: set_lamp_colors(colors),
