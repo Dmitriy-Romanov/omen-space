@@ -253,7 +253,8 @@ def main():
         old_attrs = None
 
     print("Starting lamp calibration: %d..%d of %d" % (start, end - 1, count))
-    print("For each lamp: press the lit key twice in a row. Shift is ignored; the first press may wake the keyboard.")
+    print("For each lamp: press the lit key twice in a row; Shift is ignored.")
+    print("If nothing lights up, press SHIFT 5 times to mark this lamp as nothing.")
     print("No key for %.0fs = skip. Ctrl+C = stop." % args.timeout)
     dbus("StartLampCalibration")
     time.sleep(1.0)
@@ -268,8 +269,8 @@ def main():
                   % (index + 1, count, index, lamp["id"], lamp["binding"],
                      lamp["x"] // 1000, lamp["y"] // 1000))
             allow_shift = lamp["binding"] in (0xE1, 0xE5)
-            print("  press the lit key TWICE in a row (SHIFT is ignored%s)"
-                  % ("" if not allow_shift else "; Shift allowed for this lamp"))
+            print("  press the lit key TWICE; SHIFT is ignored; 5x SHIFT = nothing%s"
+                  % ("" if not allow_shift else " (Shift allowed for this lamp)"))
             sys.stdout.flush()
             set_lamp_colors(colors)
             flush_events(fd)
@@ -278,6 +279,7 @@ def main():
             # answer. Two identical presses in a row confirm the key.
             rec = None
             last = None
+            shift_count = 0
             deadline = time.monotonic() + args.timeout
             while time.monotonic() < deadline:
                 code = wait_key(
@@ -290,10 +292,28 @@ def main():
                            "binding": lamp["binding"], "skipped": True}
                     print("  skipped (timeout)")
                     break
-                if code in (42, 54) and not allow_shift:  # KEY_LEFTSHIFT / KEY_RIGHTSHIFT
-                    print("  SHIFT ignored; press the lit key twice")
-                    last = None
+                if code in (42, 54):  # KEY_LEFTSHIFT / KEY_RIGHTSHIFT
+                    shift_count += 1
+                    if shift_count >= 5:
+                        rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
+                               "binding": lamp["binding"], "skipped": True, "nothing": True}
+                        print("  5x SHIFT -> nothing; next lamp")
+                        break
+                    if allow_shift:
+                        if code == last:
+                            rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
+                                   "binding": lamp["binding"], "keycode": code,
+                                   "key_name": read_name(code)}
+                            print("  recorded %s (code %d)" % (rec["key_name"], code))
+                            break
+                        last = code
+                        deadline = time.monotonic() + args.timeout
+                        print("  got SHIFT (%d/5 -> nothing); press SHIFT again" % shift_count)
+                    else:
+                        print("  SHIFT ignored (%d/5 -> nothing)" % shift_count)
+                        last = None
                     continue
+                shift_count = 0
                 if code == last:
                     rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
                            "binding": lamp["binding"], "keycode": code, "key_name": read_name(code)}
