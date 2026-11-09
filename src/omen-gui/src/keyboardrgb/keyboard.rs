@@ -3,12 +3,70 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::keyboardrgb::helpers::*;
+
+fn keyboard_layout_is_de() -> bool {
+    let Ok(home) = std::env::var("HOME") else { return false };
+    let path = format!("{}/.config/omenspace/settings.json", home);
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| {
+            v.get("keyboard_layout")
+                .and_then(|x| x.as_str())
+                .map(|s| s.eq_ignore_ascii_case("de") || s.eq_ignore_ascii_case("german"))
+        })
+        .unwrap_or(false)
+}
+
+fn save_keyboard_layout(de: bool) {
+    let Ok(home) = std::env::var("HOME") else { return };
+    let path = format!("{}/.config/omenspace/settings.json", home);
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let mut value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    value["keyboard_layout"] = serde_json::json!(if de { "de" } else { "en" });
+    let _ = std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap_or_default());
+}
+
+fn german_labels() -> HashMap<String, String> {
+    // Physical positions are US names; these are the German keycaps.
+    let pairs = [
+        ("~", "^"),
+        ("-", "ß"),
+        ("=", "´"),
+        ("[", "Ü"),
+        ("]", "+"),
+        ("\\", "#"),
+        (";", "Ö"),
+        ("'", "Ä"),
+        ("Z", "Y"),
+        ("Y", "Z"),
+        ("/", "-"),
+        ("Del", "Entf"),
+        ("Ctrl", "Strg"),
+        ("Alt_R", "AltGr"),
+    ];
+    pairs
+        .iter()
+        .map(|(us, de)| ((*us).to_string(), (*de).to_string()))
+        .collect()
+}
+
 pub fn build_interactive_keyboard(
     detected_mode: KeyboardMode,
     zone_colors: Rc<RefCell<Vec<String>>>,
     per_key_colors: Rc<RefCell<Vec<String>>>,
     state_json_opt: &Option<serde_json::Value>
 ) -> (gtk::Box, Rc<dyn Fn(&str, f64)>, gtk::Box) {
+    let layout_de = Rc::new(std::cell::Cell::new(keyboard_layout_is_de()));
+    let layout_labels: Rc<RefCell<HashMap<String, String>>> = Rc::new(RefCell::new(
+        if layout_de.get() { german_labels() } else { HashMap::new() },
+    ));
+
     // The daemon stores the last 104-key frame. Without this the canvas used
     // its blue placeholder for every key it does not draw (indices 98..103),
     // so "All + green" left those lamps blue on the hardware.
@@ -302,12 +360,45 @@ pub fn build_interactive_keyboard(
         h: height,
     });
 
-    let canvas_width = (row1_width + 70.0).max(760.0);
+    let canvas_width = (row1_width + 20.0).max(760.0);
     let drawing_area = gtk::DrawingArea::builder()
         .width_request(canvas_width as i32)
         .height_request(260)
         .halign(gtk::Align::Center)
         .build();
+
+    // EN/DE key-label switch, left of the Effect dropdown.
+    let layout_btn = gtk::ToggleButton::builder()
+        .label(if layout_de.get() { "DE" } else { "EN" })
+        .active(layout_de.get())
+        .valign(gtk::Align::Center)
+        .tooltip_text("Keyboard key labels: EN / DE")
+        .build();
+    layout_btn.add_css_class("flat");
+    let layout_label = gtk::Label::builder()
+        .label("Layout:")
+        .css_classes(["dim-label"])
+        .build();
+    top_bar.prepend(&layout_btn);
+    top_bar.prepend(&layout_label);
+    let layout_de_c = layout_de.clone();
+    let layout_labels_c = layout_labels.clone();
+    let da_layout = drawing_area.clone();
+    layout_btn.connect_toggled(move |btn| {
+        let de = btn.is_active();
+        layout_de_c.set(de);
+        btn.set_label(if de { "DE" } else { "EN" });
+        {
+            let mut labels = layout_labels_c.borrow_mut();
+            if de {
+                *labels = german_labels();
+            } else {
+                labels.clear();
+            }
+        }
+        da_layout.queue_draw();
+        save_keyboard_layout(de);
+    });
 
     let keys_rc = Rc::new(keys);
     let selected_keys = Rc::new(RefCell::new(Vec::<String>::new()));
@@ -320,6 +411,7 @@ pub fn build_interactive_keyboard(
     let selected_draw = selected_keys.clone();
     let hovered_draw = hovered_key.clone();
     let colors_draw = key_colors.clone();
+    let labels_draw = layout_labels.clone();
     let sel_mode_draw = sel_mode.clone();
     
     drawing_area.set_draw_func(move |_, cr, _, _| {
@@ -328,6 +420,7 @@ pub fn build_interactive_keyboard(
         let sel = selected_draw.borrow();
         let hov = hovered_draw.borrow();
         let cols = colors_draw.borrow();
+        let labels = labels_draw.borrow();
         cr.translate(10.0, 10.0);
         
         let (anim_mode, anim_speed, anim_time) = anim_draw.borrow().clone();
@@ -388,12 +481,16 @@ pub fn build_interactive_keyboard(
             if lum > 0.5 { cr.set_source_rgb(0.0, 0.0, 0.0); } else { cr.set_source_rgb(0.9, 0.9, 0.9); }
             
             cr.set_font_size(11.0);
-            if let Ok(extents) = cr.text_extents(&k.display) {
+            let label = labels
+                .get(&k.name)
+                .map(|s| s.as_str())
+                .unwrap_or(k.display.as_str());
+            if let Ok(extents) = cr.text_extents(label) {
                 cr.move_to(
                     k.x + (k.w - extents.width()) / 2.0 - extents.x_bearing(),
                     k.y + (k.h - extents.height()) / 2.0 - extents.y_bearing()
                 );
-                let _ = cr.show_text(&k.display);
+                let _ = cr.show_text(label);
             }
         }
     });
