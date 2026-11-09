@@ -1409,6 +1409,7 @@ struct RgbInner {
     /// way so a calibration script can light individual lamps.
     calibrating: bool,
     calibration_until: Option<std::time::Instant>,
+    lightbar_step: f64,
 }
 
 #[derive(Clone)]
@@ -1438,7 +1439,7 @@ impl RgbService {
 
         let inner = Arc::new(Mutex::new(RgbInner {
             hw, hid_per_key, config, per_key_map, color_cache: HashMap::new(), anim_step: 0.0, mcu_sig: None, wizard, evdev_monitor, desktop_rgb,
-            calibrating: false, calibration_until: None,
+            calibrating: false, calibration_until: None, lightbar_step: 0.0,
         }));
 
         let svc = Self { inner: inner.clone() };
@@ -1460,6 +1461,13 @@ impl RgbService {
         let anim_inner = inner.clone();
         tokio::spawn(async move {
             Self::software_animation_loop(anim_inner).await;
+        });
+
+        // Software light-bar effects (the 4-zone WMI bar has no hardware
+        // effect engine; it is driven by writing all_zones at ~20 Hz).
+        let lb_inner = inner.clone();
+        tokio::spawn(async move {
+            Self::lightbar_animation_loop(lb_inner).await;
         });
         
         // Spawn uleds listener loop
@@ -1552,6 +1560,64 @@ impl RgbService {
                     break; // Could implement reconnect logic if needed
                 }
             }
+        }
+    }
+
+    /// Software effects for the 4-zone WMI light bar. The bar has no hardware
+    /// effect engine, so wave/breathing/cycle are rendered here and written to
+    /// all_zones at about 20 Hz, independent of the keyboard mode.
+    async fn lightbar_animation_loop(inner: Arc<Mutex<RgbInner>>) {
+        loop {
+            let mut g = inner.lock().await;
+            if !g.hw.available
+                || !g.hw.has_lightbar()
+                || !g.hid_per_key.is_lamparray()
+                || g.calibrating
+            {
+                drop(g);
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                continue;
+            }
+            let power = g.config.lightbar_power && g.config.lightbar_brightness > 0;
+            let mode = g.config.lightbar_mode.clone();
+            if !power || mode == "static" {
+                drop(g);
+                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+                continue;
+            }
+
+            let speed = g.config.lightbar_speed;
+            let scaler = (g.config.lightbar_brightness as f64 / 100.0).clamp(0.0, 1.0);
+            let colors = g.config.lightbar_colors.clone();
+            let (r1, g1, b1) = parse_hex_color(
+                colors.first().map(|s| s.as_str()).unwrap_or("FF0000"),
+            );
+            let (r2, g2, b2) = parse_hex_color(
+                colors.get(1).map(|s| s.as_str()).unwrap_or("0000FF"),
+            );
+            g.lightbar_step += (speed as f64 / 100.0) * 0.25;
+            let step = g.lightbar_step;
+
+            let zone_count = 4usize;
+            let mut frame = Vec::with_capacity(zone_count);
+            for i in 0..zone_count {
+                let (r, gc, b) = compute_anim_color(
+                    &mode, step, i, zone_count, r1, g1, b1, r2, g2, b2,
+                );
+                frame.push(format!(
+                    "{:02X}{:02X}{:02X}",
+                    ((r as f64) * scaler) as u8,
+                    ((gc as f64) * scaler) as u8,
+                    ((b as f64) * scaler) as u8
+                ));
+            }
+            if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
+                g.hw.write_lightbar_zones(&frame);
+            } else {
+                g.hw.write_lightbar(&frame);
+            }
+            drop(g);
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     }
 
@@ -1726,7 +1792,7 @@ impl RgbService {
                 }
             }
 
-            if has_old_sysfs {
+            if has_old_sysfs && !g.hid_per_key.is_lamparray() {
                 let zone_count = g.hw.zone_count as usize;
                 let mut current_frame = Vec::with_capacity(zone_count);
                 for i in 0..zone_count {

@@ -199,9 +199,19 @@ pub fn build_page() -> (adw::PreferencesPage, Option<adw::PreferencesGroup>, Opt
         lb_bright_row.add_suffix(&lb_bright_scale);
         lb_group.add(&lb_bright_row);
         
+        let lber_bright = lb_effect_row_rc.clone();
+        let lbs_bright = lb_speed_rc.clone();
         lb_bright_scale.connect_value_changed(move |scale| {
             let val = scale.value() as i32;
-            crate::daemon_client::set_lightbar_global_sync(val > 0, val, "static", 50);
+            // Keep the selected effect; changing brightness must not reset it.
+            let mode = match lber_bright.selected() {
+                1 => "wave",
+                2 => "breathing",
+                3 => "cycle",
+                _ => "static",
+            };
+            let speed = *lbs_bright.borrow() as i32;
+            crate::daemon_client::set_lightbar_global_sync(val > 0, val, mode, speed);
         });
 
         page.add(&lb_group);
@@ -217,6 +227,7 @@ pub fn build_page() -> (adw::PreferencesPage, Option<adw::PreferencesGroup>, Opt
         let lb_bright_row_c = lb_bright_row.clone();
         let lb_speed_row_c = lb_speed_row.clone();
         let lb_preview_group_c = lb_preview_group.clone();
+        let lbs_enable = lb_speed_rc.clone();
 
         lb_enable_row.connect_active_notify(move |row| {
             let is_active = row.is_active();
@@ -224,7 +235,14 @@ pub fn build_page() -> (adw::PreferencesPage, Option<adw::PreferencesGroup>, Opt
             lb_speed_row_c.set_visible(is_active);
             lb_bright_row_c.set_visible(is_active);
             lb_preview_group_c.set_visible(is_active);
-            crate::daemon_client::set_lightbar_global_sync(is_active, 100, "static", 50);
+            let mode = match lb_effect_row_c.selected() {
+                1 => "wave",
+                2 => "breathing",
+                3 => "cycle",
+                _ => "static",
+            };
+            let speed = *lbs_enable.borrow() as i32;
+            crate::daemon_client::set_lightbar_global_sync(is_active, 100, mode, speed);
         });
         let lb_prod_lower = specs.product_name.to_lowercase();
         let has_lightbar_hardware = detected_mode == KeyboardMode::DesktopRgb || lb_prod_lower.contains("desktop") || lb_prod_lower.contains("transcend") || lb_prod_lower.contains("max");
