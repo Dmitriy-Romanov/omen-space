@@ -1,7 +1,7 @@
 > **8D88 fork.** This branch is an opt-in build for the HP OMEN MAX 16-ak0xxx
 > (board 8D88, keyboard 0d62:54bf). It is based on upstream v2.2.1 / 6a5adae.
-> Other boards are not tested here. See [FORK-8D88.md](FORK-8D88.md) for scope,
-> install and known limitations.
+> Other boards are not tested here. See [FORK-8D88.md](FORK-8D88.md) for scope
+> and [INSTALL-8D88.md](INSTALL-8D88.md) for a fresh install.
 
 <div align="center">
   <img src="images/omenspace.png" alt="OMEN Space Logo" width="110" />
@@ -48,6 +48,11 @@
 ---
 
 ## Installation
+
+> **8D88 fork:** the upstream one-line installer below installs upstream, not
+> this fork. For this branch use [INSTALL-8D88.md](INSTALL-8D88.md), or:
+>
+>     curl -sSL https://raw.githubusercontent.com/Dmitriy-Romanov/omen-space/main/install-8d88.sh | bash
 
 Run the one-line installer to automatically detect your distribution, install build dependencies, compile the workspace, and register the DKMS kernel drivers (`hp-wmi` & `hp-omen-extra`):
 
