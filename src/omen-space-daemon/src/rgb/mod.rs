@@ -303,6 +303,38 @@ impl RgbHardware {
 // register at all. LampArray fixes both: a single LampRangeUpdate paints all
 // 120 lamps, and brightness is applied in software when the frame is built.
 
+/// Per-lamp GUI slot overrides for board 8D88 (German OMEN MAX, 0d62:54bf).
+/// These keys have no standard HID usage (or share a misleading one), so the
+/// binding mapping plus nearest-lamp fallback painted the wrong neighbour.
+/// Slot 98 is the extra Settings key added to the GUI canvas.
+const LAMP_SLOT_OVERRIDES_8D88: &[(usize, usize)] = &[
+    // second LEDs of wide keys
+    (1, 0),      // Esc
+    (14, 13),    // Del
+    (21, 17),    // ^ / grave
+    (42, 35),    // Tab
+    (62, 53),    // Caps Lock
+    (79, 52),    // keypad +
+    (119, 85),   // keypad Enter
+    // special keys
+    (16, 14),    // Omen
+    (17, 15),    // Calculator
+    (18, 98),    // Settings (new GUI slot)
+    (19, 16),    // Power
+    (101, 87),   // Fn
+    (103, 88),   // Win
+    (111, 92),   // Menu / Copilot (UI label Copilot)
+];
+
+fn is_board_8d88() -> bool {
+    static CACHE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHE.get_or_init(|| {
+        std::fs::read_to_string("/sys/class/dmi/id/board_name")
+            .map(|s| s.trim().eq_ignore_ascii_case("8D88"))
+            .unwrap_or(false)
+    })
+}
+
 const LAMPARRAY_PREFIX: &[u8] = &[0x05, 0x59, 0x09, 0x01];
 const DARFON_VENDOR_PREFIX: &[u8] = &[0x06, 0x01, 0xFF, 0x09, 0x01];
 
@@ -678,8 +710,19 @@ impl LampArrayBackend {
         let mut out = vec![(0u8, 0u8, 0u8); n];
         let mut mapped = vec![false; n];
 
+        // Board-specific overrides come first: these lamps must not fall back
+        // to a neighbour by binding or distance.
+        if is_board_8d88() && n == 120 {
+            for &(lamp, slot) in LAMP_SLOT_OVERRIDES_8D88 {
+                if lamp < n && slot < key_colors.len() {
+                    out[lamp] = key_colors[slot];
+                    mapped[lamp] = true;
+                }
+            }
+        }
+
         for (i, lamp) in self.lamps.iter().enumerate() {
-            if lamp.binding == 0 {
+            if mapped[i] || lamp.binding == 0 {
                 continue;
             }
             if let Some(idx) = Self::KEY_USAGES

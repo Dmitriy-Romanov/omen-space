@@ -242,9 +242,16 @@ pub fn build_interactive_keyboard(
         for (name, size_mult) in row_keys {
             let width = unit_size * *size_mult;
             if !name.is_empty() {
-                let display_name = if let Some(stripped) = name.strip_suffix("_R") { stripped }
-                    else if let Some(stripped) = name.strip_suffix("_num") { stripped }
-                    else { name };
+                let display_name = if *name == "Menu" {
+                    // The physical key at this position is Copilot on 8D88.
+                    "Copilot".to_string()
+                } else if let Some(stripped) = name.strip_suffix("_R") {
+                    stripped.to_string()
+                } else if let Some(stripped) = name.strip_suffix("_num") {
+                    stripped.to_string()
+                } else {
+                    name.to_string()
+                };
                 
                 let def_color = if detected_mode == KeyboardMode::Omen4Zone {
                     zone_colors.borrow()[(get_zone_for_key(name) - 1) as usize].clone()
@@ -261,7 +268,7 @@ pub fn build_interactive_keyboard(
                 keys.push(KeyGeom {
                     id: global_idx,
                     name: name.to_string(),
-                    display: display_name.to_string(),
+                    display: display_name,
                     x: current_x,
                     y: current_y,
                     w: width - margin,
@@ -274,8 +281,28 @@ pub fn build_interactive_keyboard(
         current_y += height + margin;
     }
 
+    // Extra Settings key for board 8D88. It uses slot 98 of the 104-colour
+    // frame (the canvas only draws 98 keys), so existing key ids do not shift.
+    let row1_width: f64 = layout_def[0].iter().map(|(_, w)| w * unit_size).sum();
+    let settings_color = per_key_colors
+        .borrow()
+        .get(98)
+        .cloned()
+        .unwrap_or_else(|| "#0099ED".to_string());
+    key_colors.borrow_mut().insert("Settings".to_string(), settings_color);
+    keys.push(KeyGeom {
+        id: 98,
+        name: "Settings".to_string(),
+        display: "Settings".to_string(),
+        x: row1_width + 4.0,
+        y: 0.0,
+        w: unit_size * 1.2 - margin,
+        h: height,
+    });
+
+    let canvas_width = (row1_width + 70.0).max(760.0);
     let drawing_area = gtk::DrawingArea::builder()
-        .width_request(760)
+        .width_request(canvas_width as i32)
         .height_request(260)
         .halign(gtk::Align::Center)
         .build();
