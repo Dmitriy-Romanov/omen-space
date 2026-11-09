@@ -194,8 +194,11 @@ def save_markdown(path, data):
 def main():
     global KEY_NAMES
     ap = argparse.ArgumentParser()
-    ap.add_argument("--start", type=int, default=0)
+    ap.add_argument("--start", type=int, default=None,
+                    help="first lamp index; with --resume, explicit --start overrides auto-advance")
     ap.add_argument("--end", type=int, default=None)
+    ap.add_argument("--single", action="store_true",
+                    help="record the first non-Shift press (for multi-scancode keys)")
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--refresh", type=float, default=2.0,
                     help="re-send the lamp frame every N seconds (0 = off)")
@@ -236,9 +239,9 @@ def main():
         except Exception:
             pass
     recorded = {r["index"] for r in data["records"] if not r.get("skipped")}
-    start = args.start
-    if args.resume and recorded:
-        start = max(start, max(recorded) + 1)
+    start = args.start if args.start is not None else 0
+    if args.resume and args.start is None and recorded:
+        start = max(recorded) + 1
     end = args.end if args.end is not None else count
     end = min(end, count)
 
@@ -314,6 +317,11 @@ def main():
                         last = None
                     continue
                 shift_count = 0
+                if args.single:
+                    rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
+                           "binding": lamp["binding"], "keycode": code, "key_name": read_name(code)}
+                    print("  recorded %s (code %d, single)" % (rec["key_name"], code))
+                    break
                 if code == last:
                     rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
                            "binding": lamp["binding"], "keycode": code, "key_name": read_name(code)}
