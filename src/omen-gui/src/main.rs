@@ -2,6 +2,8 @@ use libadwaita as adw;
 use gtk::prelude::*;
 use libadwaita::prelude::AdwApplicationWindowExt;
 use std::rc::Rc;
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 mod i18n;
 mod monitoring;
@@ -20,6 +22,14 @@ mod daemon_client;
 mod asset_resolver;
 mod debug_center;
 const APP_ID: &str = "org.hp.OmenSpace";
+
+type LazyPage = Box<dyn FnOnce() -> gtk::Widget>;
+
+fn profile_mark(start: std::time::Instant, label: &str) {
+    if std::env::var_os("OMEN_STARTUP_PROFILE").is_some() {
+        eprintln!("[startup] {:?} {}", start.elapsed(), label);
+    }
+}
 
 fn ensure_tray_running() {
     omen_types::repair_graphical_session_env();
@@ -155,6 +165,8 @@ fn apply_appearance_mode() {
 }
 
 fn build_ui(app: &adw::Application) {
+    let t = std::time::Instant::now();
+    profile_mark(t, "build_ui begin");
     apply_startup_profile();
     apply_appearance_mode();
     ensure_tray_running();
@@ -190,6 +202,7 @@ fn build_ui(app: &adw::Application) {
     });
 
     render_ui(&window, "performance");
+    profile_mark(t, "render_ui done");
 
     // ── Unverified Board Banner ────────────────────────────────────────────
     // Check once whether the current board is in the community-verified list.
@@ -249,9 +262,11 @@ fn build_ui(app: &adw::Application) {
     }
 
     window.present();
+    profile_mark(t, "window presented");
 }
 
 fn render_ui(window: &adw::ApplicationWindow, initial_page: &str) {
+    let t = std::time::Instant::now();
     window.set_title(Some(i18n::t("app_title")));
 
     let stack = gtk::Stack::builder()
@@ -283,6 +298,7 @@ fn render_ui(window: &adw::ApplicationWindow, initial_page: &str) {
     gen_box.append(&spec_header);
     gen_box.append(&page_perf);
     gen_box.append(&page_mon);
+    profile_mark(t, "performance page");
 
     let m = 20;
     let page_undervolt = undervolt::build_page();
@@ -296,6 +312,7 @@ fn render_ui(window: &adw::ApplicationWindow, initial_page: &str) {
     page_mux.set_margin_start(m);
     page_mux.set_margin_end(m);
     page_mux.set_margin_bottom(m);
+    profile_mark(t, "undervolt/mux pages");
 
     let mon_hdr = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -315,6 +332,7 @@ fn render_ui(window: &adw::ApplicationWindow, initial_page: &str) {
         .build();
     mon_content.append(&mon_hdr);
     mon_content.append(&monitoring::build_page(false));
+    profile_mark(t, "monitoring page");
 
     let rgb_hdr = gtk::Box::builder()
         .orientation(gtk::Orientation::Vertical)
@@ -335,50 +353,97 @@ fn render_ui(window: &adw::ApplicationWindow, initial_page: &str) {
     page_rgb.set_margin_start(m);
     page_rgb.set_margin_end(m);
     page_rgb.set_margin_bottom(m);
+    profile_mark(t, "rgb page");
 
-    // Setup dynamic on_lang_changed callback that re-renders the UI instantly
-    let win_clone = window.clone();
-    let on_lang_changed = Rc::new(move || {
-        render_ui(&win_clone, "settings");
-    });
+    // These four pages are built on first selection. Building them eagerly
+    // cost ~0.55 s and, more importantly, made the first window layout take
+    // seconds because GTK laid out every hidden page.
+    let mut lazy_builders: HashMap<&'static str, LazyPage> = HashMap::new();
+    let mut lazy_containers: HashMap<&'static str, gtk::Box> = HashMap::new();
+    for name in ["settings", "updater", "appprof", "debug"] {
+        let container = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .build();
+        stack.add_named(&container, Some(name));
+        lazy_containers.insert(name, container);
+    }
 
-    let page_settings = settings::build_page(window, Some(on_lang_changed), lb_group_opt, lb_preview_group_opt);
-    page_settings.set_margin_top(m);
-    page_settings.set_margin_start(m);
-    page_settings.set_margin_end(m);
-    page_settings.set_margin_bottom(m);
-
-    let page_updater = updater::build_page(window);
-    page_updater.set_margin_top(m);
-    page_updater.set_margin_start(m);
-    page_updater.set_margin_end(m);
-    page_updater.set_margin_bottom(m);
-
-    let page_app_profiles = appprofiles::build_page(window);
-    page_app_profiles.set_margin_top(m);
-    page_app_profiles.set_margin_start(m);
-    page_app_profiles.set_margin_end(m);
-    page_app_profiles.set_margin_bottom(m);
-
-
-
-    let page_debug = debug_center::build_page(window);
-    page_debug.set_margin_top(m);
-    page_debug.set_margin_start(m);
-    page_debug.set_margin_end(m);
-    page_debug.set_margin_bottom(m);
+    {
+        let w = window.clone();
+        let lb = lb_group_opt.clone();
+        let lbp = lb_preview_group_opt.clone();
+        lazy_builders.insert("settings", Box::new(move || -> gtk::Widget {
+            let win_cb = w.clone();
+            let on_lang: Rc<dyn Fn()> = Rc::new(move || {
+                render_ui(&win_cb, "settings");
+            });
+            let page = settings::build_page(&w, Some(on_lang), lb, lbp);
+            page.set_margin_top(m);
+            page.set_margin_start(m);
+            page.set_margin_end(m);
+            page.set_margin_bottom(m);
+            page.upcast()
+        }));
+    }
+    {
+        let w = window.clone();
+        lazy_builders.insert("updater", Box::new(move || -> gtk::Widget {
+            let page = updater::build_page(&w);
+            page.set_margin_top(m);
+            page.set_margin_start(m);
+            page.set_margin_end(m);
+            page.set_margin_bottom(m);
+            page.upcast()
+        }));
+    }
+    {
+        let w = window.clone();
+        lazy_builders.insert("appprof", Box::new(move || -> gtk::Widget {
+            let page = appprofiles::build_page(&w);
+            page.set_margin_top(m);
+            page.set_margin_start(m);
+            page.set_margin_end(m);
+            page.set_margin_bottom(m);
+            page.upcast()
+        }));
+    }
+    {
+        let w = window.clone();
+        lazy_builders.insert("debug", Box::new(move || -> gtk::Widget {
+            let page = debug_center::build_page(&w);
+            page.set_margin_top(m);
+            page.set_margin_start(m);
+            page.set_margin_end(m);
+            page.set_margin_bottom(m);
+            page.upcast()
+        }));
+    }
+    profile_mark(t, "lazy builders registered");
 
     stack.add_named(&gen_box, Some("performance"));
     stack.add_named(&page_undervolt, Some("undervolt"));
     stack.add_named(&page_mux, Some("mux"));
     stack.add_named(&mon_content, Some("monitoring"));
     stack.add_named(&page_rgb, Some("rgb"));
-    stack.add_named(&page_app_profiles, Some("appprof"));
-    stack.add_named(&page_updater, Some("updater"));
-    stack.add_named(&page_settings, Some("settings"));
-    stack.add_named(&page_debug, Some("debug"));
 
     stack.set_visible_child_name(initial_page);
+
+    let lazy_builders = Rc::new(RefCell::new(lazy_builders));
+    let lazy_containers = Rc::new(lazy_containers);
+    let ensure_page: Rc<dyn Fn(&str)> = {
+        let builders = lazy_builders.clone();
+        let containers = lazy_containers.clone();
+        let stack_nav = stack.clone();
+        Rc::new(move |name: &str| {
+            if let Some(builder) = builders.borrow_mut().remove(name) {
+                let page = builder();
+                if let Some(container) = containers.get(name) {
+                    container.append(&page);
+                }
+            }
+            stack_nav.set_visible_child_name(name);
+        })
+    };
 
     let toggle_sidebar_btn = gtk::ToggleButton::builder()
         .icon_name("sidebar-show-symbolic")
@@ -504,23 +569,26 @@ fn render_ui(window: &adw::ApplicationWindow, initial_page: &str) {
         }
     }
 
-    let stack_clone = stack.clone();
+    // A language re-render can open directly on a lazy page (settings).
+    ensure_page(initial_page);
+
+    let ensure_sidebar = ensure_page.clone();
     let bottom_list_clone = bottom_list.clone();
     sidebar_list.connect_row_selected(move |_list, row_opt| {
         if let Some(row) = row_opt {
             bottom_list_clone.unselect_all(); // Mutual exclusion
             let page_name = row.widget_name().to_string();
-            stack_clone.set_visible_child_name(&page_name);
+            ensure_sidebar(&page_name);
         }
     });
 
-    let stack_clone2 = stack.clone();
+    let ensure_bottom = ensure_page.clone();
     let sidebar_list_clone2 = sidebar_list.clone();
     bottom_list.connect_row_selected(move |_list, row_opt| {
         if let Some(row) = row_opt {
             sidebar_list_clone2.unselect_all(); // Mutual exclusion
             let page_name = row.widget_name().to_string();
-            stack_clone2.set_visible_child_name(&page_name);
+            ensure_bottom(&page_name);
         }
     });
 
