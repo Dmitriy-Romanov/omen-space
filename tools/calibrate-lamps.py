@@ -199,6 +199,8 @@ def main():
     ap.add_argument("--end", type=int, default=None)
     ap.add_argument("--single", action="store_true",
                     help="record the first non-Shift press (for multi-scancode keys)")
+    ap.add_argument("--label", default=None,
+                    help="record this label without a keypress (for Fn/Power and firmware-only keys)")
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--refresh", type=float, default=2.0,
                     help="re-send the lamp frame every N seconds (0 = off)")
@@ -277,6 +279,14 @@ def main():
             sys.stdout.flush()
             set_lamp_colors(colors)
             flush_events(fd)
+
+            if args.label:
+                rec = {"index": index, "id": lamp["id"], "x": lamp["x"], "y": lamp["y"],
+                       "binding": lamp["binding"], "key_name": args.label, "manual": True}
+                print("  recorded manual label %s" % args.label)
+                data["records"] = [r for r in data["records"] if r["index"] != index] + [rec]
+                save_json(args.out, data)
+                continue
 
             # The first non-Shift press may be the wake-up, the second the
             # answer. Two identical presses in a row confirm the key.
