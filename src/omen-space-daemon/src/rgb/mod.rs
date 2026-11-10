@@ -1818,6 +1818,48 @@ impl RgbService {
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
     }
+    /// Apply only the light bar. SetLightbarColor/SetLightbarGlobal used to call
+    /// apply_state(), which also re-applied the keyboard; on 8D88 that snapped the
+    /// keyboard back to its saved boot preset whenever a bar segment was changed.
+    async fn apply_lightbar(inner: Arc<Mutex<RgbInner>>) {
+        let mut g = inner.lock().await;
+        if !g.hw.available {
+            return;
+        }
+        let effect_active = g.config.lightbar_mode != "static"
+            && g.config.lightbar_power
+            && g.config.lightbar_brightness > 0;
+        if !effect_active {
+            let lb_colors: Vec<String> = if !g.config.lightbar_power || g.config.lightbar_brightness == 0 {
+                vec!["000000".to_string(); 4]
+            } else {
+                let scaler = (g.config.lightbar_brightness as f64 / 100.0).clamp(0.0, 1.0);
+                (0..4).map(|i| {
+                    let raw = g.config.lightbar_colors.get(i).cloned().unwrap_or_else(|| "000000".to_string());
+                    scale_hex_color(&raw, scaler)
+                }).collect()
+            };
+            if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
+                g.hw.write_lightbar_zones(&lb_colors);
+            } else {
+                g.hw.write_lightbar(&lb_colors);
+            }
+        }
+        if g.hid_per_key.is_lamparray() && g.hw.has_lightbar() {
+            let level = if g.hw.is_new_driver {
+                if g.config.lightbar_power { g.config.lightbar_brightness as i32 } else { 0 }
+            } else if g.config.lightbar_power && g.config.lightbar_brightness > 0 {
+                1
+            } else {
+                0
+            };
+            if g.last_lightbar_level != level {
+                g.hw.write_brightness(level as u32);
+                g.last_lightbar_level = level;
+            }
+        }
+    }
+
     async fn apply_state(inner: Arc<Mutex<RgbInner>>) {
         let mut g = inner.lock().await;
 
@@ -2084,7 +2126,7 @@ impl RgbService {
             g.config.lightbar_power = true;
             g.config.save();
         }
-        Self::apply_state(self.inner.clone()).await;
+        Self::apply_lightbar(self.inner.clone()).await;
         "OK".to_string()
     }
 
@@ -2098,7 +2140,7 @@ impl RgbService {
             g.config.lightbar_speed = (speed_val as u32).clamp(1, 100);
             g.config.save();
         }
-        Self::apply_state(self.inner.clone()).await;
+        Self::apply_lightbar(self.inner.clone()).await;
         "OK".to_string()
     }
 
