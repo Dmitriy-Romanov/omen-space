@@ -367,29 +367,27 @@ pub fn build_interactive_keyboard(
         .halign(gtk::Align::Center)
         .build();
 
-    // EN/DE key-label switch, left of the Effect dropdown.
-    // A real two-state button (styled like the EC button), not a dropdown.
-    let layout_btn = gtk::ToggleButton::builder()
-        .label(if layout_de.get() { "DE" } else { "EN" })
-        .active(layout_de.get())
-        .width_request(58)
+    // Layout dropdown, left of Effect and using the same DropDown control, so
+    // adding more layouts later is just a new entry in the model.
+    let layout_model = gtk::StringList::new(&["EN", "DE"]);
+    let layout_dropdown = gtk::DropDown::builder()
+        .model(&layout_model)
+        .selected(if layout_de.get() { 1 } else { 0 })
         .valign(gtk::Align::Center)
-        .tooltip_text("Keyboard key labels: EN / DE")
+        .tooltip_text("Keyboard key labels")
         .build();
-    layout_btn.add_css_class("ec-btn");
     let layout_label = gtk::Label::builder()
         .label("Layout:")
         .css_classes(["dim-label"])
         .build();
-    top_bar.prepend(&layout_btn);
+    top_bar.prepend(&layout_dropdown);
     top_bar.prepend(&layout_label);
     let layout_de_c = layout_de.clone();
     let layout_labels_c = layout_labels.clone();
     let da_layout = drawing_area.clone();
-    layout_btn.connect_toggled(move |btn| {
-        let de = btn.is_active();
+    layout_dropdown.connect_selected_notify(move |dd| {
+        let de = dd.selected() == 1;
         layout_de_c.set(de);
-        btn.set_label(if de { "DE" } else { "EN" });
         {
             let mut labels = layout_labels_c.borrow_mut();
             if de {
