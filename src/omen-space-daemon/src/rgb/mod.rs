@@ -2047,6 +2047,16 @@ impl RgbService {
         if zone_val != 8 && !(0..17).contains(&zone_val) {
             return "FAIL".to_string();
         }
+        // On a LampArray keyboard with a separate WMI light bar, zones 4..7 are
+        // the bar, not keyboard zones. Route them to the bar so an old caller
+        // cannot switch the keyboard to static / clear hw_effects.
+        let bar_zone = {
+            let g = self.inner.lock().await;
+            g.hid_per_key.is_lamparray() && g.hw.has_lightbar() && (4..8).contains(&zone_val)
+        };
+        if bar_zone {
+            return self.set_lightbar_color(zone_val - 4, hex).await;
+        }
         {
             let mut g = self.inner.lock().await;
             g.config.mode = "static".to_string();
