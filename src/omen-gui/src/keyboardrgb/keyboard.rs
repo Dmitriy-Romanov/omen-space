@@ -368,13 +368,15 @@ pub fn build_interactive_keyboard(
         .build();
 
     // EN/DE key-label switch, left of the Effect dropdown.
+    // A real two-state button (styled like the EC button), not a dropdown.
     let layout_btn = gtk::ToggleButton::builder()
         .label(if layout_de.get() { "DE" } else { "EN" })
         .active(layout_de.get())
+        .width_request(58)
         .valign(gtk::Align::Center)
         .tooltip_text("Keyboard key labels: EN / DE")
         .build();
-    layout_btn.add_css_class("flat");
+    layout_btn.add_css_class("ec-btn");
     let layout_label = gtk::Label::builder()
         .label("Layout:")
         .css_classes(["dim-label"])
