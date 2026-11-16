@@ -21,6 +21,7 @@ mod updater;
 mod daemon_client;
 mod asset_resolver;
 mod debug_center;
+mod daemon_status_ui;
 const APP_ID: &str = "org.hp.OmenSpace";
 
 type LazyPage = Box<dyn FnOnce() -> gtk::Widget>;
@@ -184,6 +185,7 @@ fn build_ui(app: &adw::Application) {
         .default_width(1150)
         .default_height(820)
         .build();
+    daemon_status_ui::bind(&window);
 
     // Interface zoom (Ctrl+Shift+Plus / Ctrl+Shift+Minus, Ctrl+Shift+0 to reset).
     // Registered before the first present() so a saved factor is applied to the

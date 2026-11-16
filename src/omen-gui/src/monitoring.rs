@@ -457,6 +457,11 @@ fn drive_blocks(specs: &HardwareSpecs) -> Vec<DriveBlock> {
 /// has a zero total and gets a text instead of a misleading "0 / 0 GB".
 fn usage_display(u: Option<&DriveUsage>) -> (String, f64) {
     match u {
+        Some(u) if u.usage_complete == Some(false) => (
+            if u.total_bytes > 0 { format!("{} (partial)", format_usage(u.used_bytes, u.total_bytes)) }
+            else { "Usage unavailable".to_string() },
+            0.0,
+        ),
         Some(u) if u.total_bytes > 0 => (
             format_usage(u.used_bytes, u.total_bytes),
             usage_fraction(u.used_bytes, u.total_bytes),
@@ -826,49 +831,6 @@ pub fn build_page(is_general: bool) -> gtk::Box {
     }
 
 
-    // ── Daemon Offline Dialog ────────────────────────────────────────────────
-    use libadwaita as adw;
-    use libadwaita::prelude::*;
-
-    let sec_clone = sec.clone();
-    crate::daemon_client::subscribe_daemon_status(move |status| {
-        use crate::daemon_client::DaemonStatus;
-        if status == DaemonStatus::Offline {
-            if let Some(win) = sec_clone.root().and_downcast::<gtk::Window>() {
-                let dialog = adw::MessageDialog::new(
-                    Some(&win),
-                    Some(crate::i18n::t("daemon_offline_title")),
-                    Some(crate::i18n::t("daemon_offline_msg"))
-                );
-                dialog.add_response("cancel", crate::i18n::t("btn_cancel"));
-                dialog.add_response("restart", crate::i18n::t("btn_restart"));
-                dialog.set_response_appearance("restart", adw::ResponseAppearance::Suggested);
-                
-                dialog.connect_response(None, |d, response| {
-                    if response == "restart" {
-                        let spawned = std::process::Command::new("pkexec")
-                            .args(["systemctl", "restart", "omen-space-daemon"])
-                            .spawn();
-                        match spawned {
-                            Ok(mut child) => {
-                                std::thread::spawn(move || { let _ = child.wait(); });
-                            }
-                            Err(_) => {
-                                if let Ok(mut child) = std::process::Command::new("systemctl")
-                                    .args(["restart", "omen-space-daemon"])
-                                    .spawn() {
-                                    std::thread::spawn(move || { let _ = child.wait(); });
-                                }
-                            }
-                        }
-                    }
-                    d.close();
-                });
-                dialog.present();
-            }
-        }
-    });
-
     // 2. Main monitor row: CPU + GPU + Device
 
     let mon_row = gtk::Box::builder()
@@ -945,9 +907,9 @@ pub fn build_page(is_general: bool) -> gtk::Box {
         gpu_ui.load_bar.set_fraction(stats.gpu_load);
         gpu_ui.load_pct_label.set_label(&format!("{}%", (stats.gpu_load * 100.0) as i32));
         if stats.gpu_pwr <= -1.5 {
-            gpu_ui.pwr_label.set_label("Idle");
+            gpu_ui.pwr_label.set_label("Not sampled");
         } else if stats.gpu_pwr < 0.0 {
-            gpu_ui.pwr_label.set_label("D3Cold");
+            gpu_ui.pwr_label.set_label("Suspended");
         } else {
             gpu_ui.pwr_label.set_label(&format!("{:.1}W", stats.gpu_pwr));
         }
@@ -1094,7 +1056,13 @@ pub fn build_page(is_general: bool) -> gtk::Box {
 
             gpu_watt_ui.warning_label.set_visible(gpu_throttled);
 
-            watt_ui.val_label.set_label(&format!("{:.1} W", stats.total_pwr));
+            let prefix = if stats.total_power_estimated == Some(true) { "~" } else { "" };
+            watt_ui.val_label.set_label(&format!("{}{:.1} W",prefix,stats.total_pwr));
+            watt_ui.val_label.set_tooltip_text(Some(if stats.total_power_partial == Some(true) {
+                "Estimated total; one or more power components are unavailable."
+            } else if stats.total_power_estimated == Some(true) {
+                "Estimated from sampled CPU/GPU power plus a fixed overhead."
+            } else { "System power" }));
         }
     });
 
@@ -1196,6 +1164,7 @@ mod tests {
             used_bytes: used,
             total_bytes: total,
             mounts: mounts.iter().map(|m| m.to_string()).collect(),
+            usage_complete: None,
         }
     }
 
@@ -1203,6 +1172,15 @@ mod tests {
         HardwareSpecs { drives, ssd_spec: ssd_spec.into(), ..Default::default() }
     }
 
+
+    #[test]
+    fn partial_and_unavailable_samples_are_not_presented_as_complete_usage() {
+        let mut sample=usage("sda",100,400,&["/"]);
+        sample.usage_complete=Some(false);
+        let (label,fraction)=usage_display(Some(&sample));assert!(label.contains("partial"));assert_eq!(fraction,0.0);
+        sample.used_bytes=0;sample.total_bytes=0;
+        assert_eq!(usage_display(Some(&sample)).0,"Usage unavailable");
+    }
     #[test]
     fn a_single_drive_title_is_just_its_kind() {
         let d = [drive("nvme0n1", "M", DriveKind::Nvme, 1)];
