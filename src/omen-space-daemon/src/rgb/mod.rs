@@ -1628,8 +1628,13 @@ impl RgbService {
 
     async fn software_animation_loop(inner: Arc<Mutex<RgbInner>>) {
         let mut last_per_key_colors: Vec<String> = Vec::new();
-        let mut last_key_activity =
-            crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
+        // [IDLE-WAKE] Temporarily disabled: the BIOS keyboard backlight timeout
+        // is now off, so the host-side wake repaint is not needed. It was
+        // potentially risky on this board. To restore, uncomment this variable,
+        // the activity/wake block in the static/per-key branch below, and the
+        // KEY_ACTIVITY increment in hotkey_monitor.rs.
+        // let mut last_key_activity =
+        //     crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
         loop {
             let mut g = inner.lock().await;
             if g.calibrating {
@@ -1656,23 +1661,21 @@ impl RgbService {
                 continue;
             }
             if !g.config.power || g.config.mode == "static" || g.config.mode == "per_key_custom" { 
-                // The keyboard firmware turns its own backlight off after the
-                // BIOS idle timeout. While we hold the LampArray it does not
-                // wake on a keypress, so the first key after idle has to
-                // repaint the current frame from the host.
-                let activity =
-                    crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
-                // Only the HID LampArray stops waking on its own while the
-                // host holds it. Other keyboards keep their firmware wake
-                // behaviour and must not be repainted on every keypress.
-                let wake = g.config.power
-                    && g.hid_per_key.is_lamparray()
-                    && activity != last_key_activity;
-                last_key_activity = activity;
+                // [IDLE-WAKE] Temporarily disabled (BIOS backlight auto-off is
+                // off). Original workaround: after the firmware idle timeout,
+                // the first keypress repainted the current frame because the
+                // host holds the LampArray. To restore, uncomment this block
+                // and the last_key_activity declaration above.
+                // let activity =
+                //     crate::hotkey_monitor::KEY_ACTIVITY.load(std::sync::atomic::Ordering::Relaxed);
+                // let wake = g.config.power
+                //     && g.hid_per_key.is_lamparray()
+                //     && activity != last_key_activity;
+                // last_key_activity = activity;
                 drop(g);
-                if wake {
-                    Self::apply_state(inner.clone()).await;
-                }
+                // if wake {
+                //     Self::apply_state(inner.clone()).await;
+                // }
                 tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                 continue; 
             }

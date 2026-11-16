@@ -4,12 +4,18 @@ use zbus::Connection;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::fd::AsRawFd;
 use tokio::io::unix::AsyncFd;
+// [IDLE-WAKE] Ordering returns together with the increment below.
+#[allow(unused_imports)]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Incremented for every key press seen by the monitor. The RGB service uses
 /// it to repaint the keyboard after the firmware's idle timeout has switched
 /// the backlight off: while we hold the LampArray, the firmware no longer
 /// wakes it on its own.
+///
+/// [IDLE-WAKE] Temporarily unused: the host-side wake repaint is disabled in
+/// rgb/mod.rs while the BIOS backlight timeout is off. Keep for easy restore.
+#[allow(dead_code)]
 pub static KEY_ACTIVITY: AtomicU64 = AtomicU64::new(0);
 
 /// Map a pressed key to the name broadcast in the `MacroKeyPressed` D-Bus signal.
@@ -146,9 +152,10 @@ impl HotkeyMonitor {
                                         let shift_held = left_shift || right_shift;
 
                                         if ev.value == 1 {
-                                            // Key pressed: also signals the RGB service
-                                            // that the idle backlight needs a repaint.
-                                            KEY_ACTIVITY.fetch_add(1, Ordering::Relaxed);
+                                            // [IDLE-WAKE] Temporarily disabled: the host-side
+                                            // wake repaint is off (BIOS backlight timeout off).
+                                            // Restore together with the block in rgb/mod.rs.
+                                            // KEY_ACTIVITY.fetch_add(1, Ordering::Relaxed);
                                             if let Some(name) = resolve_hotkey(key_code, shift_held) {
                                                 info!("HotkeyMonitor: Detected Hotkey / Macro Key: {}", name);
                                                 let _ = conn.emit_signal(
