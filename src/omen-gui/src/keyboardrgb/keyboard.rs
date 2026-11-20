@@ -274,7 +274,9 @@ pub fn build_interactive_keyboard(
 
     // 3. Canvas
     let layout_def = vec![
-        vec![("Esc", 1.0), ("", 0.5), ("F1", 1.0), ("F2", 1.0), ("F3", 1.0), ("F4", 1.0), ("", 0.5), ("F5", 1.0), ("F6", 1.0), ("F7", 1.0), ("F8", 1.0), ("", 0.5), ("F9", 1.0), ("F10", 1.0), ("F11", 1.0), ("F12", 1.0), ("", 0.5), ("Del", 1.0), ("Omen", 1.0), ("Calc", 1.0), ("Power", 1.0)],
+        // Columns match the number/numpad rows: Del ends at Backspace/Enter,
+        // then Omen over Num, Calc over /, Settings over *, Power over -.
+        vec![("Esc", 1.0), ("F1", 1.0), ("F2", 1.0), ("F3", 1.0), ("F4", 1.0), ("F5", 1.0), ("F6", 1.0), ("F7", 1.0), ("F8", 1.0), ("F9", 1.0), ("F10", 1.0), ("F11", 1.0), ("F12", 1.0), ("Del", 2.0), ("Omen", 1.0), ("Calc", 1.0), ("", 1.0), ("Power", 1.0)],
         vec![("~", 1.0), ("1", 1.0), ("2", 1.0), ("3", 1.0), ("4", 1.0), ("5", 1.0), ("6", 1.0), ("7", 1.0), ("8", 1.0), ("9", 1.0), ("0", 1.0), ("-", 1.0), ("=", 1.0), ("Backspace", 2.0), ("Num", 1.0), ("/", 1.0), ("*", 1.0), ("-_num", 1.0)],
         vec![("Tab", 1.5), ("Q", 1.0), ("W", 1.0), ("E", 1.0), ("R", 1.0), ("T", 1.0), ("Y", 1.0), ("U", 1.0), ("I", 1.0), ("O", 1.0), ("P", 1.0), ("[", 1.0), ("]", 1.0), ("\\", 1.5), ("7_num", 1.0), ("8_num", 1.0), ("9_num", 1.0), ("+", 1.0)],
         vec![("Caps", 1.75), ("A", 1.0), ("S", 1.0), ("D", 1.0), ("F", 1.0), ("G", 1.0), ("H", 1.0), ("J", 1.0), ("K", 1.0), ("L", 1.0), (";", 1.0), ("'", 1.0), ("Enter", 2.25), ("4_num", 1.0), ("5_num", 1.0), ("6_num", 1.0), ("", 1.0)],
@@ -295,9 +297,16 @@ pub fn build_interactive_keyboard(
         for (name, size_mult) in row_keys {
             let width = unit_size * *size_mult;
             if !name.is_empty() {
-                let display_name = if let Some(stripped) = name.strip_suffix("_R") { stripped }
-                    else if let Some(stripped) = name.strip_suffix("_num") { stripped }
-                    else { name };
+                let display_name = if *name == "Menu" {
+                    // The physical key at this position is Copilot on 8D88.
+                    "Copilot".to_string()
+                } else if let Some(stripped) = name.strip_suffix("_R") {
+                    stripped.to_string()
+                } else if let Some(stripped) = name.strip_suffix("_num") {
+                    stripped.to_string()
+                } else {
+                    name.to_string()
+                };
                 
                 let def_color = if detected_mode == KeyboardMode::Omen4Zone {
                     zone_colors.borrow()[(get_zone_for_key(name) - 1) as usize].clone()
@@ -325,6 +334,27 @@ pub fn build_interactive_keyboard(
             current_x += width;
         }
         current_y += height + margin;
+    }
+
+    // Extra Settings key. It uses colour slot 98 of the 104-key frame (the
+    // canvas only draws 98 keys), so no existing key id shifts. On the 8D88
+    // board the daemon maps that slot to the physical Settings key.
+    {
+        let settings_color = per_key_colors
+            .borrow()
+            .get(98)
+            .cloned()
+            .unwrap_or_else(|| "#0099ED".to_string());
+        key_colors.borrow_mut().insert("Settings".to_string(), settings_color);
+        keys.push(KeyGeom {
+            id: 98,
+            name: "Settings".to_string(),
+            display: "Settings".to_string(),
+            x: 17.0 * unit_size,
+            y: 0.0,
+            w: unit_size - margin,
+            h: height,
+        });
     }
 
     let drawing_area = gtk::DrawingArea::builder()
