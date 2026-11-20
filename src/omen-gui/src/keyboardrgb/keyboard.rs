@@ -328,27 +328,26 @@ pub fn build_interactive_keyboard(
 
     // 3. Canvas
     let layout_def = vec![
+        // Columns match the number/numpad rows: Del ends at Backspace/Enter,
+        // then Omen over Num, Calc over /, Settings over *, Power over -.
         vec![
             ("Esc", 1.0),
-            ("", 0.5),
             ("F1", 1.0),
             ("F2", 1.0),
             ("F3", 1.0),
             ("F4", 1.0),
-            ("", 0.5),
             ("F5", 1.0),
             ("F6", 1.0),
             ("F7", 1.0),
             ("F8", 1.0),
-            ("", 0.5),
             ("F9", 1.0),
             ("F10", 1.0),
             ("F11", 1.0),
             ("F12", 1.0),
-            ("", 0.5),
-            ("Del", 1.0),
+            ("Del", 2.0),
             ("Omen", 1.0),
             ("Calc", 1.0),
+            ("", 1.0),
             ("Power", 1.0),
         ],
         vec![
@@ -464,7 +463,10 @@ pub fn build_interactive_keyboard(
         for (name, size_mult) in row_keys {
             let width = unit_size * *size_mult;
             if !name.is_empty() {
-                let display_name = if *name == "Enter_num" {
+                let display_name = if *name == "Menu" {
+                    // The physical key at this position is Copilot on 8D88.
+                    "Copilot"
+                } else if *name == "Enter_num" {
                     "Ent"
                 } else if let Some(stripped) = name.strip_suffix("_R") {
                     stripped
@@ -509,6 +511,27 @@ pub fn build_interactive_keyboard(
             current_x += width;
         }
         current_y += height + margin;
+    }
+
+    // Extra Settings key. It uses colour slot 98 of the 104-key frame (the
+    // canvas only draws 98 keys), so no existing key id shifts. On the 8D88
+    // board the daemon maps that slot to the physical Settings key.
+    {
+        let settings_color = per_key_colors
+            .borrow()
+            .get(98)
+            .cloned()
+            .unwrap_or_else(|| "#0099ED".to_string());
+        key_colors.borrow_mut().insert("Settings".to_string(), settings_color);
+        keys.push(KeyGeom {
+            id: 98,
+            name: "Settings".to_string(),
+            display: "Settings".to_string(),
+            x: 17.0 * unit_size,
+            y: 0.0,
+            w: unit_size - margin,
+            h: height,
+        });
     }
 
     let drawing_area = gtk::DrawingArea::builder()
