@@ -18,12 +18,36 @@ Remotes in the working copy:
 Prefer merge on main so public history stays stable. Rebase feature/PR branches
 instead if they are meant to be clean upstream patches.
 
+## Current state (2026-11-22)
+
+Both upstream PRs merged, so the fork is now a thin layer over upstream:
+
+| Work | Where |
+| --- | --- |
+| LampArray backend, calibration API | upstream (PR #379) |
+| EN/DE keyboard layout selector | upstream (PR #378) |
+| Settings key slot 98, Copilot label, aligned top row | fork only (6e6921e) |
+| Lazy non-initial pages (startup perf) | fork only (b45a782) |
+| 8D88 docs, install script, build-info refresh | fork only (d95f912) |
+
+Fork base: `4f94b9d` (upstream main, v2.3.0 + 11).
+
+The branch is `fork/8d88`. Rebuilding it on a new upstream is a rebase of the
+three fork-only commits:
+
+    git fetch origin
+    git switch -c fork/8d88 origin/main
+    git cherry-pick 6e6921e b45a782 d95f912   # still-unsent work only
+    cargo build --release && cargo test -p omen-space-daemon
+    git push -f fork fork/8d88
+
 ## What to preserve on conflicts
 
-- LAMP_SLOT_OVERRIDES_8D88 and the is_board_8d88 / n == 120 gate.
 - Settings key slot 98, Copilot label, top-row column alignment.
-- EN/DE label map and the keyboard_layout setting.
-- lightbar_animation_loop and the last_lightbar_level cache.
+- Lazy page builders for settings/updater/appprof/debug pages.
+
+Already upstream, do not re-add: the EN/DE label map, the keyboard_layout
+setting, the calibration methods, and the lightbar animation cache.
 - Our tags only; do not force-push over upstream tags.
 
 ## Scenarios
