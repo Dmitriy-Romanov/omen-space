@@ -1324,6 +1324,232 @@ pub fn build_interactive_keyboard(
 
     bottom_box.append(&controls_row);
 
+    // -- Presets (Save as preset + saved list) --
+    // Only meaningful for per-key boards: a preset is a 104-slot frame, and
+    // zone boards colour by zone instead.
+    if detected_mode == KeyboardMode::PerKey {
+        let preset_box = gtk::Box::builder()
+            .orientation(gtk::Orientation::Horizontal)
+            .spacing(6)
+            .valign(gtk::Align::Center)
+            .build();
+
+        preset_box.append(&gtk::Separator::new(gtk::Orientation::Vertical));
+        preset_box.append(
+            &gtk::Label::builder()
+                .label(crate::i18n::t("kp_label"))
+                .css_classes(["dim-label"])
+                .build(),
+        );
+
+        // Index 0 is always "Save as preset…"; real presets follow.
+        let preset_dd = gtk::DropDown::builder()
+            .valign(gtk::Align::Center)
+            .tooltip_text(crate::i18n::t("kp_load_tooltip"))
+            .build();
+
+        // Rebuild the model from disk. Called on startup and after any change
+        // so the dropdown never shows a stale list.
+        let rebuild_model: Rc<dyn Fn()> = {
+            let dd = preset_dd.clone();
+            Rc::new(move || {
+                let names = crate::keyboardrgb::presets::load_presets();
+                let mut labels: Vec<String> = vec![crate::i18n::t("kp_save").to_string()];
+                if names.is_empty() {
+                    labels.push(format!("— {} —", crate::i18n::t("kp_none")));
+                } else {
+                    labels.extend(names.iter().map(|p| p.name.clone()));
+                }
+                let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
+                dd.set_model(Some(&gtk::StringList::new(&refs)));
+                dd.set_selected(0);
+            })
+        };
+        rebuild_model();
+
+        // Persist the current frame under a name chosen by the user.
+        let do_save: Rc<dyn Fn()> = {
+            let pk = per_key_colors.clone();
+            let rebuild = rebuild_model.clone();
+            let win = kb_card.clone();
+            Rc::new(move || {
+                let dialog = gtk::Window::builder()
+                    .title(crate::i18n::t("kp_name_title"))
+                    .transient_for(&win.root().and_downcast::<gtk::Window>().unwrap_or_default())
+                    .modal(true)
+                    .default_width(360)
+                    .build();
+                let vbox = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .spacing(12)
+                    .margin_top(18)
+                    .margin_bottom(18)
+                    .margin_start(18)
+                    .margin_end(18)
+                    .build();
+                vbox.append(
+                    &gtk::Label::builder()
+                        .label(crate::i18n::t("kp_name_prompt"))
+                        .xalign(0.0)
+                        .wrap(true)
+                        .build(),
+                );
+                let entry = gtk::Entry::builder()
+                    .placeholder_text(crate::i18n::t("kp_name_placeholder"))
+                    .activates_default(true)
+                    .build();
+                vbox.append(&entry);
+
+                let btns = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(6)
+                    .halign(gtk::Align::End)
+                    .build();
+                let cancel = gtk::Button::with_label(&crate::i18n::t("cancel"));
+                let ok = gtk::Button::with_label(&crate::i18n::t("save_preset"));
+                ok.add_css_class("suggested-action");
+                btns.append(&cancel);
+                btns.append(&ok);
+                vbox.append(&btns);
+                dialog.set_child(Some(&vbox));
+
+                {
+                    let d = dialog.clone();
+                    cancel.connect_clicked(move |_| d.close());
+                }
+
+                let inner_save = {
+                    let pk = pk.clone();
+                    let rebuild = rebuild.clone();
+                    let d = dialog.clone();
+                    let e = entry.clone();
+                    move || {
+                        let name = crate::keyboardrgb::presets::normalize_name(&e.text());
+                        if name.is_empty() {
+                            e.add_css_class("error");
+                            return;
+                        }
+                        let preset = crate::keyboardrgb::presets::KeyPreset {
+                            name,
+                            colors: pk.borrow().clone(),
+                        };
+                        crate::keyboardrgb::presets::upsert_preset(preset);
+                        rebuild();
+                        d.close();
+                    }
+                };
+                let inner_save = Rc::new(inner_save);
+                {
+                    let s = inner_save.clone();
+                    ok.connect_clicked(move |_| s());
+                }
+                {
+                    let s = inner_save.clone();
+                    entry.connect_activate(move |_| s());
+                }
+
+                dialog.present();
+                entry.grab_focus();
+            })
+        };
+
+        // Apply a stored preset to every key, then push one frame to the daemon.
+        let apply_preset: Rc<dyn Fn(&str)> = {
+            let pk = per_key_colors.clone();
+            let kc = key_colors.clone();
+            let keys = keys_rc.clone();
+            let da = drawing_area.clone();
+            let mode = detected_mode;
+            Rc::new(move |name: &str| {
+                let Some(preset) = crate::keyboardrgb::presets::load_presets()
+                    .into_iter()
+                    .find(|p| p.name == name)
+                else {
+                    return;
+                };
+                {
+                    let mut frame = pk.borrow_mut();
+                    for (i, slot) in frame.iter_mut().enumerate() {
+                        // Pad short presets with the default rather than
+                        // leaving stale colours on the tail slots.
+                        *slot = preset
+                            .colors
+                            .get(i)
+                            .cloned()
+                            .unwrap_or_else(|| "#0099ED".to_string());
+                    }
+                }
+                {
+                    let frame = pk.borrow();
+                    let mut kc = kc.borrow_mut();
+                    for k in keys.iter() {
+                        if let Some(c) = frame.get(k.id as usize) {
+                            kc.insert(k.name.clone(), c.clone());
+                        }
+                    }
+                }
+                if mode == KeyboardMode::PerKey {
+                    crate::daemon_client::set_per_key_colors_sync(pk.borrow().clone());
+                }
+                da.queue_draw();
+            })
+        };
+
+        {
+            let do_save = do_save.clone();
+            let apply = apply_preset.clone();
+            let rebuild = rebuild_model.clone();
+            preset_dd.connect_selected_notify(move |dd| {
+                let idx = dd.selected();
+                if idx == 0 {
+                    // "Save as preset…" is an action, not a selection — run it
+                    // and snap back so the dropdown never reads as "active".
+                    do_save();
+                    return;
+                }
+                let names = crate::keyboardrgb::presets::load_presets();
+                if let Some(p) = names.get((idx - 1) as usize) {
+                    apply(&p.name);
+                }
+                rebuild();
+            });
+        }
+
+        preset_box.append(&preset_dd);
+
+        // Deleting needs the current selection, which the dropdown resets after
+        // every load, so read it before the click rather than after.
+        let delete_btn = gtk::Button::builder()
+            .icon_name("user-trash-symbolic")
+            .tooltip_text(crate::i18n::t("kp_delete"))
+            .valign(gtk::Align::Center)
+            .build();
+        {
+            let dd = preset_dd.clone();
+            let rebuild = rebuild_model.clone();
+            delete_btn.connect_clicked(move |_| {
+                let idx = dd.selected();
+                if idx == 0 {
+                    return;
+                }
+                let names = crate::keyboardrgb::presets::load_presets();
+                if let Some(p) = names.get((idx - 1) as usize) {
+                    crate::keyboardrgb::presets::delete_preset(&p.name);
+                    rebuild();
+                }
+            });
+        }
+        preset_box.append(&delete_btn);
+
+        // Keep the dropdown fresh if a preset is saved elsewhere.
+        {
+            let rebuild = rebuild_model.clone();
+            preset_dd.connect_map(move |_| rebuild());
+        }
+
+        top_bar.append(&preset_box);
+    }
+
     kb_card.append(&bottom_box);
 
     let tick_id: Rc<RefCell<Option<gtk::TickCallbackId>>> = Rc::new(RefCell::new(None));
