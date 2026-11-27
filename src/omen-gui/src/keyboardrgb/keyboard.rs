@@ -430,6 +430,11 @@ pub fn build_interactive_keyboard(
     let mut current_y = 0.0;
     let key_colors = Rc::new(RefCell::new(HashMap::<String, String>::new()));
 
+    // Set by every user edit to the colouring (painting keys, All, per-key
+    // picker). The preset dropdown watches it and drops back to the neutral
+    // entry, because the board no longer matches any saved preset.
+    let colors_dirty = Rc::new(std::cell::Cell::new(false));
+
     for row_keys in &layout_def {
         let mut current_x = 0.0;
         for (name, size_mult) in row_keys {
@@ -779,6 +784,7 @@ pub fn build_interactive_keyboard(
     let p_color_c = paint_color.clone();
     let kc_c = key_colors.clone();
     let pk_c = per_key_colors.clone();
+        let dirty_paint = colors_dirty.clone();
     let zc_c = zone_colors.clone();
 
     let msl_click = msl_c.clone();
@@ -849,6 +855,7 @@ pub fn build_interactive_keyboard(
             }
 
             if detected_mode == KeyboardMode::PerKey {
+                dirty_paint.set(true);
                 if mode == SelectionMode::All {
                     fill_all_key_slots(&mut pk_mut, &hex);
                     zc_mut.iter_mut().take(4).for_each(|z| *z = hex.clone());
@@ -961,6 +968,7 @@ pub fn build_interactive_keyboard(
     });
 
     let pk_d = per_key_colors.clone();
+    let dirty_drag = colors_dirty.clone();
     let zc_d = zone_colors.clone();
     let keys_d = keys_rc.clone();
     let painted_d = painted_during_drag.clone();
@@ -973,6 +981,9 @@ pub fn build_interactive_keyboard(
         }
 
         let hex = hex_d.borrow().clone();
+        if detected_mode == KeyboardMode::PerKey {
+            dirty_drag.set(true);
+        }
         let mut pk_mut = pk_d.borrow_mut();
         let mut zc_mut = zc_d.borrow_mut();
         let mut zones_changed = Vec::new();
@@ -1067,6 +1078,7 @@ pub fn build_interactive_keyboard(
     let am_color = active_mode_idx.clone();
     let zc_color = zone_colors.clone();
     let pk_color = per_key_colors.clone();
+    let dirty_color = colors_dirty.clone();
     let kc_color = key_colors.clone();
     let keys_color = keys_rc.clone();
     let da_color = drawing_area.clone();
@@ -1080,6 +1092,7 @@ pub fn build_interactive_keyboard(
         let am_l = am_color.clone();
         let zc_l = zc_color.clone();
         let pk_l = pk_color.clone();
+        let dirty_l = dirty_color.clone();
         let kc_l = kc_color.clone();
         let keys_l = keys_color.clone();
         let da_l = da_color.clone();
@@ -1101,6 +1114,7 @@ pub fn build_interactive_keyboard(
             // immediately instead of keeping a stale per-zone color (#385).
             let cur_m = msl_l.get(*am_l.borrow()).map(|s| s.as_str()).unwrap_or("static");
             if cur_m != "per_key_custom" && detected_mode == KeyboardMode::PerKey {
+                dirty_l.set(true);
                 zc_l.borrow_mut().iter_mut().take(4).for_each(|z| *z = hex.clone());
                 fill_all_key_slots(&mut pk_l.borrow_mut(), &hex);
                 {
@@ -1136,6 +1150,7 @@ pub fn build_interactive_keyboard(
     let kc_reset = key_colors.clone();
     let keys_reset = keys_rc.clone();
     let da_reset = drawing_area.clone();
+    let dirty_reset = colors_dirty.clone();
     let dd_reset = effects_dropdown.clone();
     let speed_reset = speed_rc.clone();
     reset_rgb_btn.connect_clicked(move |_| {
@@ -1185,6 +1200,7 @@ pub fn build_interactive_keyboard(
         }
         crate::daemon_client::set_mode_sync("static", *speed_reset.borrow() as i32);
         da_reset.queue_draw();
+        dirty_reset.set(true);
     });
     color_container.append(&reset_rgb_btn);
 
@@ -1493,6 +1509,7 @@ pub fn build_interactive_keyboard(
 
         // Apply a stored preset to every key, then push one frame to the daemon.
         let apply_preset: Rc<dyn Fn(&str)> = {
+            let dirty_apply = colors_dirty.clone();
             let pk = per_key_colors.clone();
             let kc = key_colors.clone();
             let keys = keys_rc.clone();
@@ -1527,6 +1544,9 @@ pub fn build_interactive_keyboard(
                 }
                 crate::daemon_client::set_per_key_colors_sync(pk.borrow().clone());
                 da.queue_draw();
+                // The frame now equals this preset, so a later manual edit is
+                // what makes it "custom" again.
+                dirty_apply.set(false);
             })
         };
 
@@ -1572,6 +1592,20 @@ pub fn build_interactive_keyboard(
         }
         preset_box.append(&preset_dd);
         preset_box.append(&delete_btn);
+
+        // Any manual edit (painting keys, All, the colour picker) means the
+        // board no longer matches a saved preset, so fall back to the neutral
+        // entry instead of claiming one is active.
+        {
+            let dd = preset_dd.clone();
+            let dirty = colors_dirty.clone();
+            gtk::glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
+                if dirty.take() {
+                    refresh_dropdown(&dd);
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        }
 
         bottom_box.append(&preset_box);
     }
