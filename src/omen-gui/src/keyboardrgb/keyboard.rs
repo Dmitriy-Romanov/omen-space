@@ -1346,7 +1346,12 @@ pub fn build_interactive_keyboard(
     /// mutating the model while the DropDown is emitting selected-notify frees
     /// the StringList GTK is still walking (seen as a segfault in
     /// g_object_notify_by_pspec).
-    fn refresh_dropdown(dd: &gtk::DropDown) {
+    /// Rebuild the preset list, optionally keeping a named preset selected.
+    ///
+    /// A DropDown whose model is replaced forgets the old selection, so the
+    /// caller says what should be highlighted afterwards: a preset name, or
+    /// None for the leading "Custom" entry.
+    fn refresh_dropdown(dd: &gtk::DropDown, select: Option<&str>) {
         let mut labels: Vec<String> = vec![crate::i18n::t("kp_custom").to_string()];
         labels.extend(
             crate::keyboardrgb::presets::load_presets()
@@ -1356,9 +1361,12 @@ pub fn build_interactive_keyboard(
         let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
         let model = gtk::StringList::new(&refs);
         dd.set_model(Some(&model));
-        if dd.selected() >= refs.len() as u32 {
-            dd.set_selected(0);
-        }
+
+        let wanted = select
+            .and_then(|name| labels.iter().position(|l| l == name))
+            .filter(|idx| *idx > 0)
+            .unwrap_or(0);
+        dd.set_selected(wanted as u32);
     }
 
     // -- Presets (Save as preset + saved list) --
@@ -1482,10 +1490,13 @@ pub fn build_interactive_keyboard(
                             name,
                             colors: pk.borrow().clone(),
                         };
+                        let saved_name = preset.name.clone();
                         crate::keyboardrgb::presets::upsert_preset(preset);
                         d.close();
                         let dd = dd.clone();
-                        gtk::glib::idle_add_local_once(move || refresh_dropdown(&dd));
+                        gtk::glib::idle_add_local_once(move || {
+                            refresh_dropdown(&dd, Some(&saved_name))
+                        });
                     }
                 };
                 let commit = Rc::new(commit);
@@ -1584,8 +1595,9 @@ pub fn build_interactive_keyboard(
                 let names = crate::keyboardrgb::presets::load_presets();
                 if let Some(p) = names.get((idx - 1) as usize) {
                     crate::keyboardrgb::presets::delete_preset(&p.name);
+                    // The frame no longer matches anything that is left.
                     let dd = dd.clone();
-                    gtk::glib::idle_add_local_once(move || refresh_dropdown(&dd));
+                    gtk::glib::idle_add_local_once(move || refresh_dropdown(&dd, None));
                 }
             });
         }
@@ -1600,7 +1612,7 @@ pub fn build_interactive_keyboard(
             let dirty = colors_dirty.clone();
             gtk::glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
                 if dirty.take() {
-                    refresh_dropdown(&dd);
+                    refresh_dropdown(&dd, None);
                 }
                 gtk::glib::ControlFlow::Continue
             });
