@@ -527,6 +527,7 @@ pub fn build_interactive_keyboard(
             id: 98,
             name: "Settings".to_string(),
             display: "Settings".to_string(),
+            zone: get_zone_for_key("Settings"),
             x: 17.0 * unit_size,
             y: 0.0,
             w: unit_size - margin,
