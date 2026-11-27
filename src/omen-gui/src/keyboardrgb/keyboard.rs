@@ -522,11 +522,14 @@ pub fn build_interactive_keyboard(
             .get(98)
             .cloned()
             .unwrap_or_else(|| "#0099ED".to_string());
-        key_colors.borrow_mut().insert("Settings".to_string(), settings_color);
+        key_colors
+            .borrow_mut()
+            .insert("Settings".to_string(), settings_color);
         keys.push(KeyGeom {
             id: 98,
             name: "Settings".to_string(),
             display: "Settings".to_string(),
+            zone: get_zone_for_key("Settings"),
             x: 17.0 * unit_size,
             y: 0.0,
             w: unit_size - margin,
