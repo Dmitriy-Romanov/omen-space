@@ -713,6 +713,7 @@ pub fn build_interactive_keyboard(
 
     let am_idx = active_mode_idx.clone();
     let msl_local = msl_c.clone();
+    let dirty_effect = colors_dirty.clone();
     let aa_local = aa_hook.clone();
     let speed_ref = speed_rc.clone();
     let direction_globals = globals.clone();
@@ -749,6 +750,12 @@ pub fn build_interactive_keyboard(
                         kc_mut.insert(k.name.clone(), pk[k.id].clone());
                     }
                 }
+            }
+            // Only "static" and the per-key layout render exactly what a
+            // preset saved. Every other effect animates its own palette, so
+            // the saved layout is no longer what the keyboard shows.
+            if detected_mode == KeyboardMode::PerKey && m != "static" && m != "per_key_custom" {
+                dirty_effect.set(true);
             }
             let speed = *speed_ref.borrow();
             if m == "wave_ltr" {
