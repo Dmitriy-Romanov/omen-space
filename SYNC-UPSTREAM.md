@@ -18,30 +18,29 @@ Remotes in the working copy:
 Prefer merge on main so public history stays stable. Rebase feature/PR branches
 instead if they are meant to be clean upstream patches.
 
-## Current state (2026-11-26, upstream v2.5.4)
+## Current state (2026-11-27, upstream v2.6.1)
 
-The fork is now a very thin layer over upstream — basically one GUI commit plus docs:
+The fork is now one GUI commit plus docs. Both upstream contributions are merged.
 
 | Work | Where |
 | --- | --- |
 | LampArray backend, calibration API | upstream (PR #379) |
 | EN/DE keyboard layout selector | upstream (PR #378) |
-| Lazy non-initial pages (startup perf) | upstream (issue #384, v2.4.0) |
-| LAMP_SLOT_OVERRIDES_OMEN_MAX incl. Settings slot 98 | upstream (`lamparray.rs`) |
-| build_info.json written by setup.sh | upstream |
-| Settings key / Copilot label / aligned top row in the **GUI canvas** | fork only (`c3ae7e3`) |
-| 8D88 docs, install script, upstream-aware build-info script | fork only |
+| Lazy non-initial pages | upstream (issue #384, v2.4.0) |
+| Per-key colour presets | upstream (PR #397, v2.6.0) |
+| Power-profile failure reporting (issue #396) | upstream (v2.6.0) |
+| Settings key / Copilot label / aligned top row | fork only (e178b7d) |
+| 8D88 docs, install script, build-info script | fork only |
 
-Fork base: `c188714` (upstream main, v2.5.4).
+Fork base: `c43cabe` (upstream main, v2.6.1). Branch `fork/8d88-v261`.
 
-Note the daemon already maps lamp → slot 98 upstream; what the fork adds is only
-the *drawing* of that key, the Copilot label and the 18-column top row.
+The whole fork-only source diff is 30 lines in `keyboard.rs`.
 
-The branch is `fork/8d88-v254`. Rebuilding on a new upstream is one cherry-pick:
+Rebuilding on a new upstream:
 
     git fetch origin
     git switch -c fork/8d88 origin/main
-    git cherry-pick <settings-key-commit>   # expect conflicts in keyboard.rs
+    git cherry-pick <settings-key-commit>
     git checkout <old-fork> -- FORK-8D88.md INSTALL-8D88.md UPDATE-8D88.md \
         SYNC-UPSTREAM.md install-8d88.sh tools/update-build-info.sh tools/calibrate-lamps.py
     cargo build --release && cargo test --release
@@ -51,18 +50,17 @@ The branch is `fork/8d88-v254`. Rebuilding on a new upstream is one cherry-pick:
 
 ## What to preserve on conflicts
 
-- Settings key slot 98, Copilot label, top-row column alignment in
-  `src/omen-gui/src/keyboardrgb/keyboard.rs`.
+Only three things, all in `src/omen-gui/src/keyboardrgb/keyboard.rs`:
 
-Upstream reformats that file with rustfmt and uses one-key-per-line rows, so the
-old single-line `layout_def` will always conflict. Re-apply:
-1. top row without the `("", 0.5)` spacers, `("Del", 2.0)` + Omen/Calc/""/Power;
-2. `"Menu" -> "Copilot"` in the `display_name` chain (upstream adds `Enter_num -> "Ent"` there);
-3. the `Extra Settings key` block after the row loop (`x: 17.0 * unit_size`, id 98).
+1. Top row without the `("", 0.5)` spacers, `("Del", 2.0)` and Omen/Calc/""/Power.
+2. `"Menu" -> "Copilot"` in the `display_name` chain.
+3. The `Extra Settings key` block after the row loop: id 98,
+   `x: 17.0 * unit_size`, and `zone: get_zone_for_key("Settings")`
+   (upstream added the `zone` field to `KeyGeom` in v2.6.1).
 
-Already upstream, do not re-add: EN/DE label map, keyboard_layout setting,
-calibration methods, lightbar animation cache, lazy page builders, slot-98 lamp
-mapping.
+Already upstream, do not re-add: presets, lazy pages, EN/DE layout,
+calibration API, lightbar cache, slot-98 lamp mapping, power-profile error
+reporting.
 
 ## Scenarios
 
