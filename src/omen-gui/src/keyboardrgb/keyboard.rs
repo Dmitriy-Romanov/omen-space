@@ -1374,14 +1374,10 @@ pub fn build_interactive_keyboard(
                 .build(),
         );
 
-        let preset_dd = gtk::DropDown::builder()
-            .valign(gtk::Align::Center)
-            .tooltip_text(crate::i18n::t("kp_load_tooltip"))
-            .build();
-
-        // build_labels() is pure; set_model() only ever runs outside a
-        // selection handler (startup, after save, after delete, on map).
-        let build_labels = || -> Vec<String> {
+        // Build the dropdown with a model already attached: a DropDown created
+        // without one does not reliably pick up a later set_model() before it
+        // is realised, which showed up as an empty selector.
+        let initial_labels: Vec<String> = {
             let names = crate::keyboardrgb::presets::load_presets();
             if names.is_empty() {
                 vec![crate::i18n::t("kp_none").to_string()]
@@ -1389,19 +1385,13 @@ pub fn build_interactive_keyboard(
                 names.into_iter().map(|p| p.name).collect()
             }
         };
+        let initial_refs: Vec<&str> = initial_labels.iter().map(|s| s.as_str()).collect();
+        let preset_dd = gtk::DropDown::builder()
+            .model(&gtk::StringList::new(&initial_refs))
+            .valign(gtk::Align::Center)
+            .tooltip_text(crate::i18n::t("kp_load_tooltip"))
+            .build();
 
-        let apply_model = {
-            let dd = preset_dd.clone();
-            move |labels: &[String]| {
-                let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
-                let model = gtk::StringList::new(&refs);
-                dd.set_model(Some(&model));
-                if dd.selected() >= refs.len() as u32 {
-                    dd.set_selected(0);
-                }
-            }
-        };
-        apply_model(&build_labels());
 
         // Persist the current frame under a name chosen by the user.
         let do_save: Rc<dyn Fn()> = {
@@ -1563,6 +1553,7 @@ pub fn build_interactive_keyboard(
                 }
             });
         }
+        preset_box.append(&preset_dd);
         preset_box.append(&delete_btn);
 
         bottom_box.append(&preset_box);
