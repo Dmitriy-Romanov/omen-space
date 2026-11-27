@@ -299,6 +299,7 @@ pub(super) const ENTRIES: &[(&str, &str)] = &[
     ("effect_raindrop", "Gotas de lluvia"),
     ("kb_per_key_custom", "Personalizado por tecla"),
     ("kp_label", "Ajustes:"),
+    ("kp_custom", "Personalizado"),
     ("kp_save", "Guardar como preajuste…"),
     ("kp_delete", "Eliminar preajuste"),
     ("kp_name_title", "Guardar preajuste de teclado"),

@@ -332,6 +332,7 @@ pub(super) const ENTRIES: &[(&str, &str)] = &[
     ("effect_raindrop", "Raindrop (Yağmur)"),
     ("kb_per_key_custom", "Tuş Bazlı Özel"),
     ("kp_label", "Ön Ayarlar:"),
+    ("kp_custom", "Özel"),
     ("kp_save", "Ön ayar olarak kaydet…"),
     ("kp_delete", "Ön ayarı sil"),
     ("kp_name_title", "Klavye ön ayarını kaydet"),

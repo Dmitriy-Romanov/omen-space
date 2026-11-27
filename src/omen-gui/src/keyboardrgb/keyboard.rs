@@ -1347,7 +1347,7 @@ pub fn build_interactive_keyboard(
     /// the StringList GTK is still walking (seen as a segfault in
     /// g_object_notify_by_pspec).
     fn refresh_dropdown(dd: &gtk::DropDown) {
-        let mut labels: Vec<String> = vec![crate::i18n::t("kp_none").to_string()];
+        let mut labels: Vec<String> = vec![crate::i18n::t("kp_custom").to_string()];
         labels.extend(
             crate::keyboardrgb::presets::load_presets()
                 .into_iter()
@@ -1398,7 +1398,7 @@ pub fn build_interactive_keyboard(
         // emits no selected-notify (GTK only fires on a real change) — which
         // looked like "choosing my preset does nothing".
         let initial_labels: Vec<String> = {
-            let mut v = vec![crate::i18n::t("kp_none").to_string()];
+            let mut v = vec![crate::i18n::t("kp_custom").to_string()];
             v.extend(
                 crate::keyboardrgb::presets::load_presets()
                     .into_iter()
@@ -1561,11 +1561,10 @@ pub fn build_interactive_keyboard(
                 if let Some(p) = names.get((idx - 1) as usize) {
                     apply(&p.name);
                 }
-                // Park on the neutral entry so the very same preset can be
-                // chosen again (after a Reset, for instance). Deferred: the
-                // model must not be touched during its own signal.
-                let dd = dd.clone();
-                gtk::glib::idle_add_local_once(move || refresh_dropdown(&dd));
+                // Stay on the chosen preset: that is what the board now shows.
+                // apply() clears the dirty flag, so the watcher will not pull
+                // us back to "Custom" straight after.
+                let _ = dd;
             });
         }
 

@@ -331,6 +331,7 @@ pub(super) const ENTRIES: &[(&str, &str)] = &[
     ("effect_raindrop", "Raindrop"),
     ("kb_per_key_custom", "Per-Key Custom"),
     ("kp_label", "Presets:"),
+    ("kp_custom", "Custom"),
     ("kp_save", "Save as preset…"),
     ("kp_delete", "Delete preset"),
     ("kp_name_title", "Save keyboard preset"),
