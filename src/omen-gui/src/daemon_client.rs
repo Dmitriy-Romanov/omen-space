@@ -517,7 +517,23 @@ pub async fn generate_diagnostic_report_async() -> Result<String, Box<dyn std::e
     Ok(proxy.generate_diagnostic_report().await?)
 }
 
+/// Hardware specs are static at runtime, but every page builder asks for them
+/// and each call costs a D-Bus round-trip that can take seconds: building the
+/// five initial pages made the window appear ~14 s late. Cache the result for
+/// a while so one page build does not pay for it five times over.
+static SPECS_CACHE: std::sync::Mutex<Option<(std::time::Instant, HardwareSpecs)>> =
+    std::sync::Mutex::new(None);
+const SPECS_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub fn get_hardware_specs_sync() -> HardwareSpecs {
+    {
+        let guard = SPECS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, specs)) = guard.as_ref() {
+            if at.elapsed() < SPECS_TTL {
+                return specs.clone();
+            }
+        }
+    }
     let json_str = block_with_timeout(2500, "{}".to_string(), get_hardware_specs_async());
     let mut specs: HardwareSpecs = match serde_json::from_str(&json_str) {
         Ok(s) => s,
@@ -543,6 +559,10 @@ pub fn get_hardware_specs_sync() -> HardwareSpecs {
     }
     if specs.os_spec.is_empty() {
         specs.os_spec = "Linux".to_string();
+    }
+    {
+        let mut guard = SPECS_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = Some((std::time::Instant::now(), specs.clone()));
     }
     specs
 }
