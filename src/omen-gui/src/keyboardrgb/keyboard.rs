@@ -1331,12 +1331,12 @@ pub fn build_interactive_keyboard(
     /// the StringList GTK is still walking (seen as a segfault in
     /// g_object_notify_by_pspec).
     fn refresh_dropdown(dd: &gtk::DropDown) {
-        let names = crate::keyboardrgb::presets::load_presets();
-        let labels: Vec<String> = if names.is_empty() {
-            vec![crate::i18n::t("kp_none").to_string()]
-        } else {
-            names.into_iter().map(|p| p.name).collect()
-        };
+        let mut labels: Vec<String> = vec![crate::i18n::t("kp_none").to_string()];
+        labels.extend(
+            crate::keyboardrgb::presets::load_presets()
+                .into_iter()
+                .map(|p| p.name),
+        );
         let refs: Vec<&str> = labels.iter().map(|s| s.as_str()).collect();
         let model = gtk::StringList::new(&refs);
         dd.set_model(Some(&model));
@@ -1377,13 +1377,18 @@ pub fn build_interactive_keyboard(
         // Build the dropdown with a model already attached: a DropDown created
         // without one does not reliably pick up a later set_model() before it
         // is realised, which showed up as an empty selector.
+        // Index 0 is a neutral "no preset selected" entry. Without it a board
+        // with a single preset would sit on that preset, and picking it again
+        // emits no selected-notify (GTK only fires on a real change) — which
+        // looked like "choosing my preset does nothing".
         let initial_labels: Vec<String> = {
-            let names = crate::keyboardrgb::presets::load_presets();
-            if names.is_empty() {
-                vec![crate::i18n::t("kp_none").to_string()]
-            } else {
-                names.into_iter().map(|p| p.name).collect()
-            }
+            let mut v = vec![crate::i18n::t("kp_none").to_string()];
+            v.extend(
+                crate::keyboardrgb::presets::load_presets()
+                    .into_iter()
+                    .map(|p| p.name),
+            );
+            v
         };
         let initial_refs: Vec<&str> = initial_labels.iter().map(|s| s.as_str()).collect();
         let preset_dd = gtk::DropDown::builder()
@@ -1529,10 +1534,18 @@ pub fn build_interactive_keyboard(
             let apply = apply_preset.clone();
             preset_dd.connect_selected_notify(move |dd| {
                 let idx = dd.selected();
+                if idx == 0 {
+                    return; // neutral entry, nothing to apply
+                }
                 let names = crate::keyboardrgb::presets::load_presets();
-                if let Some(p) = names.get(idx as usize) {
+                if let Some(p) = names.get((idx - 1) as usize) {
                     apply(&p.name);
                 }
+                // Park on the neutral entry so the very same preset can be
+                // chosen again (after a Reset, for instance). Deferred: the
+                // model must not be touched during its own signal.
+                let dd = dd.clone();
+                gtk::glib::idle_add_local_once(move || refresh_dropdown(&dd));
             });
         }
 
@@ -1545,8 +1558,12 @@ pub fn build_interactive_keyboard(
         {
             let dd = preset_dd.clone();
             delete_btn.connect_clicked(move |_| {
+                let idx = dd.selected();
+                if idx == 0 {
+                    return;
+                }
                 let names = crate::keyboardrgb::presets::load_presets();
-                if let Some(p) = names.get(dd.selected() as usize) {
+                if let Some(p) = names.get((idx - 1) as usize) {
                     crate::keyboardrgb::presets::delete_preset(&p.name);
                     let dd = dd.clone();
                     gtk::glib::idle_add_local_once(move || refresh_dropdown(&dd));
